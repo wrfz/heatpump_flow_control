@@ -11,6 +11,7 @@ from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant, State, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import (
     AddEntitiesCallback,
     Coroutine,
@@ -533,8 +534,30 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
             await self._async_save_model()
 
             # Prüfe ob Switch aktiv ist, dann sende an Wärmepumpe
-            switch_entity_id = f"switch.{DOMAIN}_aktiv"
-            switch_state = self.hass.states.get(switch_entity_id)
+            # Der Switch hat unique_id = {DOMAIN}_{entry_id}_aktiv
+            switch_state = None
+            switch_unique_id = f"{DOMAIN}_{self._entry_id}_aktiv"
+
+            # Suche Switch über unique_id in der Entity Registry
+            entity_registry = er.async_get(self.hass)
+
+            for entity_id in entity_registry.entities:
+                entry = entity_registry.async_get(entity_id)
+                if entry and entry.unique_id == switch_unique_id:
+                    switch_state = self.hass.states.get(entity_id)
+                    break
+
+            # Fallback: Versuche direkt über konstruierte Entity-ID
+            if not switch_state:
+                switch_entity_id = f"switch.{DOMAIN}_aktiv"
+                switch_state = self.hass.states.get(switch_entity_id)
+
+            _LOGGER.debug(
+                "Checking switch: unique_id=%s, entity_id=%s, state=%s",
+                switch_unique_id,
+                switch_state.entity_id if switch_state else "NOT_FOUND",
+                switch_state.state if switch_state else "NOT_FOUND",
+            )
 
             if switch_state and switch_state.state == "on":
                 await self._async_set_vorlauf_soll(vorlauf_soll)

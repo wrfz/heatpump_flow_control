@@ -115,6 +115,10 @@ class FlowController:
 
         self.use_fallback = True
 
+        # Initialisiere power-Attribute VOR _setup() für backwards compatibility
+        self.power_history = []
+        self.power_enabled = False
+
         self._setup(
             min_vorlauf=min_vorlauf,
             max_vorlauf=max_vorlauf,
@@ -180,6 +184,24 @@ class FlowController:
             self.reward_learning_enabled,
             self.power_enabled,
         )
+
+    def _ensure_attributes(self) -> None:
+        """Stellt sicher, dass alle Attribute existieren (Backwards Compatibility).
+
+        Wird bei Bedarf aufgerufen wenn Objekt aus Storage geladen wurde.
+        """
+        if not hasattr(self, "power_enabled"):
+            self.power_enabled = False
+        if not hasattr(self, "power_history"):
+            self.power_history = []
+        if not hasattr(self, "erfahrungs_speicher"):
+            self.erfahrungs_speicher = ErfahrungsSpeicher(max_size=200)
+        if not hasattr(self, "reward_learning_enabled"):
+            self.reward_learning_enabled = True
+        if not hasattr(self, "min_reward_hours"):
+            self.min_reward_hours = 2.0
+        if not hasattr(self, "max_reward_hours"):
+            self.max_reward_hours = 6.0
 
     def _heizkurve_fallback(self, aussen_temp: float, raum_abweichung: float) -> float:
         """Fallback Heizkurve für Kaltstart.
@@ -705,6 +727,8 @@ class FlowController:
         Returns:
             tuple: (vorlauf_soll, features_dict)
         """
+        # Backwards compatibility: Stelle sicher, dass alle Attribute existieren
+        self._ensure_attributes()
 
         features = self._erstelle_features(
             aussen_temp, raum_ist, raum_soll, vorlauf_ist, power_aktuell
@@ -732,12 +756,24 @@ class FlowController:
                 # Sanity check: Falls Model unrealistische Werte liefert
                 if vorlauf_soll < 15 or vorlauf_soll > 70:
                     _LOGGER.warning(
-                        "Model liefert unrealistischen Wert %.1f°C, verwende Heizkurve",
+                        "Model liefert unrealistischen Wert %.1f°C (Features: %s), verwende Heizkurve",
                         vorlauf_soll,
+                        {k: round(v, 3) for k, v in features.items()},
                     )
                     vorlauf_soll = self._heizkurve_fallback(
                         aussen_temp, features["raum_abweichung"]
                     )
+                    # Zurück zum Fallback-Modus wenn Model offensichtlich kaputt ist
+                    if vorlauf_soll > 1000:
+                        _LOGGER.error(
+                            "Model-Output extrem unrealistisch (%.0f°C), aktiviere Fallback-Modus",
+                            vorlauf_soll,
+                        )
+                        self.use_fallback = True
+                        self.predictions_count = 0
+                        vorlauf_soll = self._heizkurve_fallback(
+                            aussen_temp, features["raum_abweichung"]
+                        )
                 elif self.use_fallback:
                     _LOGGER.info("Wechsel von Heizkurve zu ML-Model")
                     self.use_fallback = False
