@@ -1,4 +1,4 @@
-"""Wärmepumpen ML Regelung Integration für Home Assistant."""
+"""Heatpump Flow Control Integration für Home Assistant."""
 
 import logging
 
@@ -15,13 +15,13 @@ PLATFORMS = ["number", "switch"]
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
-    """Set up the Wärmepumpen ML component."""
+    """Set up the Heatpump Flow Control component."""
     hass.data.setdefault(DOMAIN, {})
     return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up Wärmepumpen ML from a config entry."""
+    """Set up Heatpump Flow Control from a config entry."""
     _LOGGER.info("async_setup_entry()")
 
     hass.data.setdefault(DOMAIN, {})

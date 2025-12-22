@@ -131,7 +131,7 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
         model_file_name = f"{DOMAIN}_{entry_id}.model.pkl"
         self._model_path = Path(self.hass.config.path(model_file_name))
 
-        # ML Controller
+        # Flow Controller
         self._controller = FlowController(
             min_vorlauf=self._min_vorlauf,
             max_vorlauf=self._max_vorlauf,

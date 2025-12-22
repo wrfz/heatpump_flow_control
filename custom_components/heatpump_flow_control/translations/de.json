@@ -1,0 +1,45 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Heatpump Flow Control einrichten",
+        "description": "Konfiguriere die Machine Learning basierte Regelung für deine Luftwärmepumpe.",
+        "data": {
+          "aussen_temp_sensor": "Außentemperatur Sensor",
+          "raum_ist_sensor": "Raum-Ist Sensor",
+          "raum_soll_sensor": "Raum-Soll Sensor (oder Climate Entity)",
+          "vorlauf_ist_sensor": "Vorlauf-Ist Sensor",
+          "vorlauf_soll_entity": "Vorlauf-Soll Entity (Input Number / Number / Climate)",
+          "betriebsart_sensor": "Betriebsart Sensor (optional)",
+          "betriebsart_heizen_wert": "Betriebsart-Wert für 'Heizen'",
+          "power_sensor": "Power-Sensor (optional - positiv=Netzbezug, negativ=Einspeisung)",
+          "min_vorlauf": "Minimale Vorlauftemperatur",
+          "max_vorlauf": "Maximale Vorlauftemperatur",
+          "update_interval": "Update-Intervall (Minuten)",
+          "learning_rate": "Lernrate",
+          "trend_history_size": "Trend-Historie Größe"
+        }
+      }
+    },
+    "error": {
+      "unknown": "Unbekannter Fehler aufgetreten"
+    },
+    "abort": {
+      "already_configured": "Diese Integration ist bereits konfiguriert"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Optionen",
+        "description": "Passe die Regelungs-Parameter an.",
+        "data": {
+          "min_vorlauf": "Minimale Vorlauftemperatur",
+          "max_vorlauf": "Maximale Vorlauftemperatur",
+          "update_interval": "Update-Intervall (Minuten)",
+          "learning_rate": "Lernrate"
+        }
+      }
+    }
+  }
+}

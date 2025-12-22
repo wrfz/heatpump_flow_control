@@ -102,7 +102,7 @@ class ErfahrungsSpeicher:
 
 
 class FlowController:
-    """ML Controller für Vorlauf-Temperatur Regelung."""
+    """Flow Controller für Vorlauf-Temperatur Regelung."""
 
     def __init__(
         self,
@@ -111,7 +111,7 @@ class FlowController:
         learning_rate: float = DEFAULT_LEARNING_RATE,
         trend_history_size: int = DEFAULT_TREND_HISTORY_SIZE,
     ) -> None:
-        """Initialize the ML controller."""
+        """Initialize the flow controller."""
 
         self.use_fallback = True
 
@@ -130,7 +130,7 @@ class FlowController:
         learning_rate: float = DEFAULT_LEARNING_RATE,
         trend_history_size: int = DEFAULT_TREND_HISTORY_SIZE,
     ) -> None:
-        """Initialize the ML controller."""
+        """Initialize the flow controller."""
 
         self.min_vorlauf = min_vorlauf
         self.max_vorlauf = max_vorlauf

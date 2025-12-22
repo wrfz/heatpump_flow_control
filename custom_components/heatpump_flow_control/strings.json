@@ -1,0 +1,45 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Setup Heatpump Flow Control",
+        "description": "Configure the Machine Learning based control for your air source heat pump.",
+        "data": {
+          "aussen_temp_sensor": "Outdoor Temperature Sensor",
+          "raum_ist_sensor": "Room Temperature Sensor (Actual)",
+          "raum_soll_sensor": "Room Temperature Sensor (Setpoint) or Climate Entity",
+          "vorlauf_ist_sensor": "Flow Temperature Sensor (Actual)",
+          "vorlauf_soll_entity": "Flow Temperature Setpoint Entity (Input Number / Number / Climate)",
+          "betriebsart_sensor": "Operating Mode Sensor (optional)",
+          "betriebsart_heizen_wert": "Operating Mode Value for 'Heating'",
+          "power_sensor": "Power Sensor (optional - positive=grid, negative=feed-in)",
+          "min_vorlauf": "Minimum Flow Temperature",
+          "max_vorlauf": "Maximum Flow Temperature",
+          "update_interval": "Update Interval (minutes)",
+          "learning_rate": "Learning Rate",
+          "trend_history_size": "Trend History Size"
+        }
+      }
+    },
+    "error": {
+      "unknown": "Unknown error occurred"
+    },
+    "abort": {
+      "already_configured": "This integration is already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Options",
+        "description": "Adjust the control parameters.",
+        "data": {
+          "min_vorlauf": "Minimum Flow Temperature",
+          "max_vorlauf": "Maximum Flow Temperature",
+          "update_interval": "Update Interval (minutes)",
+          "learning_rate": "Learning Rate"
+        }
+      }
+    }
+  }
+}

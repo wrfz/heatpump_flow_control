@@ -1,4 +1,4 @@
-"""Config flow for Wärmepumpen ML integration."""
+"""Config flow for Heatpump Flow Control integration."""
 
 import logging
 
@@ -108,7 +108,7 @@ def get_config_schema(defaults=None):
 
 
 class FlowControlConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Handle a config flow for Wärmepumpen ML."""
+    """Handle a config flow for Heatpump Flow Control."""
 
     VERSION = 1
 

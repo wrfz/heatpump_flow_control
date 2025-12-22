@@ -1,4 +1,4 @@
-"""Constants for the Wärmepumpen ML integration."""
+"""Constants for the Heatpump Flow Control integration."""
 
 DOMAIN = "heatpump_flow_control"
 
