@@ -8,6 +8,8 @@ CONF_RAUM_IST_SENSOR = "raum_ist_sensor"
 CONF_RAUM_SOLL_SENSOR = "raum_soll_sensor"
 CONF_VORLAUF_IST_SENSOR = "vorlauf_ist_sensor"
 CONF_VORLAUF_SOLL_ENTITY = "vorlauf_soll_entity"
+CONF_BETRIEBSART_SENSOR = "betriebsart_sensor"
+CONF_BETRIEBSART_HEIZEN_WERT = "betriebsart_heizen_wert"
 CONF_MIN_VORLAUF = "min_vorlauf"
 CONF_MAX_VORLAUF = "max_vorlauf"
 CONF_UPDATE_INTERVAL = "update_interval"
@@ -20,6 +22,7 @@ DEFAULT_MAX_VORLAUF = 55.0
 DEFAULT_UPDATE_INTERVAL = 60  # Minuten
 DEFAULT_LEARNING_RATE = 0.01
 DEFAULT_TREND_HISTORY_SIZE = 12
+DEFAULT_BETRIEBSART_HEIZEN_WERT = "Heizen"
 
 # Attribute
 ATTR_AUSSEN_TEMP = "aussen_temp"

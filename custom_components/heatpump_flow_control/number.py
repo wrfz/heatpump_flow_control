@@ -10,8 +10,8 @@ from typing import Any
 from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTemperature
-from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.core import HomeAssistant, State, callback
+from homeassistant.helpers.entity_platform import AddEntitiesCallback, Mapping
 from homeassistant.helpers.event import (
     async_track_state_change_event,
     async_track_time_interval,
@@ -33,6 +33,8 @@ from .const import (
     ATTR_RAUM_SOLL,
     ATTR_VORLAUF_IST,
     CONF_AUSSEN_TEMP_SENSOR,
+    CONF_BETRIEBSART_SENSOR,
+    CONF_BETRIEBSART_HEIZEN_WERT,
     CONF_LEARNING_RATE,
     CONF_MAX_VORLAUF,
     CONF_MIN_VORLAUF,
@@ -42,6 +44,7 @@ from .const import (
     CONF_UPDATE_INTERVAL,
     CONF_VORLAUF_IST_SENSOR,
     CONF_VORLAUF_SOLL_ENTITY,
+    DEFAULT_BETRIEBSART_HEIZEN_WERT,
     DEFAULT_LEARNING_RATE,
     DEFAULT_MAX_VORLAUF,
     DEFAULT_MIN_VORLAUF,
@@ -50,6 +53,10 @@ from .const import (
     DOMAIN,
 )
 from .flow_controller import FlowController
+
+# pylint: disable=hass-logger-capital, hass-logger-period
+# ruff: noqa: BLE001
+# ruff: logging-redundant-exc-info
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -81,7 +88,7 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
     def __init__(
         self,
         hass: HomeAssistant,
-        config: dict[str, Any],
+        config: Mapping[str, Any],
         entry_id: str,
     ) -> None:
         """Initialize the number."""
@@ -95,6 +102,12 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
         self._raum_soll_sensor = config[CONF_RAUM_SOLL_SENSOR]
         self._vorlauf_ist_sensor = config[CONF_VORLAUF_IST_SENSOR]
         self._vorlauf_soll_entity = config[CONF_VORLAUF_SOLL_ENTITY]
+
+        # Optional: Betriebsart-Sensor
+        self._betriebsart_sensor = config.get(CONF_BETRIEBSART_SENSOR)
+        self._betriebsart_heizen_wert = config.get(
+            CONF_BETRIEBSART_HEIZEN_WERT, DEFAULT_BETRIEBSART_HEIZEN_WERT
+        )
 
         # Konfiguration
         self._min_vorlauf = config.get(CONF_MIN_VORLAUF, DEFAULT_MIN_VORLAUF)
@@ -261,6 +274,15 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
     async def _async_learn_from_current_state(self) -> None:
         """Learn from current sensor states."""
         try:
+            # Prüfe Betriebsart, falls konfiguriert
+            if self._betriebsart_sensor:
+                if not await self._is_heating_mode():
+                    _LOGGER.info(
+                        "Betriebsart ist nicht '%s', überspringe Learning",
+                        self._betriebsart_heizen_wert,
+                    )
+                    return
+
             sensor_values = await self._async_get_sensor_values()
             if sensor_values is None:
                 return
@@ -280,9 +302,47 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
                     vorlauf_ist,
                     self._last_vorlauf_soll,
                 )
+                _LOGGER.debug("Learning completed in heating mode")
 
         except Exception as e:
             _LOGGER.error("Error during learning: %s", e)
+
+    async def _is_heating_mode(self) -> bool:
+        """Check if heat pump is in heating mode.
+
+        Returns:
+            True if in heating mode or sensor not configured, False otherwise
+        """
+        if not self._betriebsart_sensor:
+            return True  # Kein Sensor konfiguriert = immer lernen
+
+        betriebsart_state = self.hass.states.get(self._betriebsart_sensor)
+        if betriebsart_state is None:
+            _LOGGER.warning(
+                "Betriebsart sensor %s not found, assuming heating mode",
+                self._betriebsart_sensor,
+            )
+            return True
+
+        if betriebsart_state.state in ("unavailable", "unknown"):
+            _LOGGER.debug(
+                "Betriebsart sensor %s is %s, assuming heating mode",
+                self._betriebsart_sensor,
+                betriebsart_state.state,
+            )
+            return True
+
+        current_mode = betriebsart_state.state.strip()
+        is_heating = current_mode == self._betriebsart_heizen_wert
+
+        if not is_heating:
+            _LOGGER.debug(
+                "Betriebsart is '%s' (expected '%s'), not in heating mode",
+                current_mode,
+                self._betriebsart_heizen_wert,
+            )
+
+        return is_heating
 
     async def _async_periodic_update(self, now=None) -> None:
         """Periodic update callback."""
@@ -296,8 +356,19 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
             raum_soll_state = self.hass.states.get(self._raum_soll_sensor)
             vorlauf_ist_state = self.hass.states.get(self._vorlauf_ist_sensor)
 
-            if not all(
-                [aussen_temp_state, raum_ist_state, raum_soll_state, vorlauf_ist_state]
+            _LOGGER.info(
+                "Reading sensors: aussen=%s, raum_ist=%s, raum_soll=%s, vorlauf_ist=%s",
+                self._format_sensor_as_float(aussen_temp_state),
+                self._format_sensor_as_float(raum_ist_state),
+                self._format_sensor_as_float(raum_soll_state),
+                self._format_sensor_as_float(vorlauf_ist_state),
+            )
+
+            if (
+                aussen_temp_state is None
+                or raum_ist_state is None
+                or raum_soll_state is None
+                or vorlauf_ist_state is None
             ):
                 _LOGGER.warning("One or more sensor states unavailable")
                 return None
@@ -379,6 +450,17 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
 
             # Update attributes
             model_stats = self._controller.get_model_stats()
+
+            # Prüfe aktuelle Betriebsart
+            current_betriebsart = None
+            if self._betriebsart_sensor:
+                betriebsart_state = self.hass.states.get(self._betriebsart_sensor)
+                if betriebsart_state and betriebsart_state.state not in (
+                    "unavailable",
+                    "unknown",
+                ):
+                    current_betriebsart = betriebsart_state.state
+
             self._extra_attributes = {
                 ATTR_AUSSEN_TEMP: round(aussen_temp, 1),
                 ATTR_RAUM_IST: round(raum_ist, 1),
@@ -394,6 +476,10 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
                 ATTR_NEXT_UPDATE: self._next_update.isoformat(),
                 "use_fallback": model_stats["use_fallback"],
                 "history_size": model_stats["history_size"],
+                "betriebsart": current_betriebsart,
+                "learning_enabled": current_betriebsart == self._betriebsart_heizen_wert
+                if current_betriebsart
+                else True,
             }
 
             # Nach der Berechnung speichern
@@ -466,8 +552,19 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
         except Exception as e:
             _LOGGER.error("Error setting Vorlauf-Soll: %s", e)
 
+    def _format_sensor_as_float(self, state: State | None) -> str:
+        """Konvertiert einen HA State in einen Float-String (2 Stellen) oder 'None'."""
+
+        if state is None or state.state in ("unknown", "unavailable"):
+            return "None"
+        try:
+            return f"{float(state.state):.2f}"
+        except (ValueError, TypeError):
+            return "Invalid"
+
     async def async_set_native_value(self, value: float) -> None:
         """Set new value (manual override)."""
+
         self._attr_native_value = value
         self._last_vorlauf_soll = value
 

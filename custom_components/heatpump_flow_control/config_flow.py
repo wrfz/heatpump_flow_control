@@ -45,6 +45,15 @@ def get_config_schema(defaults=None):
                 )
             ),
             vol.Optional(
+                "betriebsart_sensor", default=defaults.get("betriebsart_sensor")
+            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
+            vol.Optional(
+                "betriebsart_heizen_wert",
+                default=defaults.get("betriebsart_heizen_wert", "Heizen"),
+            ): selector.TextSelector(
+                selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
+            ),
+            vol.Optional(
                 "min_vorlauf", default=defaults.get("min_vorlauf", 25.0)
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(
