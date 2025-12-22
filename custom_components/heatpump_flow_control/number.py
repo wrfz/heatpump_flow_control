@@ -11,7 +11,11 @@ from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant, State, callback
-from homeassistant.helpers.entity_platform import AddEntitiesCallback, Mapping
+from homeassistant.helpers.entity_platform import (
+    AddEntitiesCallback,
+    Coroutine,
+    Mapping,
+)
 from homeassistant.helpers.event import (
     async_track_state_change_event,
     async_track_time_interval,
@@ -158,6 +162,8 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
         self._attr_native_max_value = self._max_vorlauf
         self._attr_native_step = 0.5
 
+        self._tasks: set[asyncio.Task[None]] = set()
+
     async def async_added_to_hass(self) -> None:
         """Run when entity about to be added to hass."""
         # ML Model laden
@@ -198,7 +204,7 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
         )
 
         # Sofortiges erstes Update nach 5 Sekunden
-        asyncio.create_task(self._delayed_first_update())
+        self._create_task(self._delayed_first_update())
 
     async def _delayed_first_update(self):
         """First update after startup with delay."""
@@ -266,10 +272,10 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
 
         # Wenn Number noch unavailable ist, prüfe ob jetzt alle verfügbar sind
         if not self._available:
-            asyncio.create_task(self._check_and_update_if_ready())
+            self._create_task(self._check_and_update_if_ready())
 
         # Nur lernen, nicht neu berechnen (das passiert stündlich)
-        asyncio.create_task(self._async_learn_from_current_state())
+        self._create_task(self._async_learn_from_current_state())
 
     async def _check_and_update_if_ready(self):
         """Check if all sensors are ready and trigger update."""
@@ -546,8 +552,8 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
                 raum_soll,
             )
 
-        except Exception as e:
-            _LOGGER.error("Error updating Vorlauf-Soll: %s", e, exc_info=True)
+        except Exception:
+            _LOGGER.exception("Error updating Vorlauf-Soll")
             self._available = False
             self.async_write_ha_state()
 
@@ -602,6 +608,12 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
             return f"{float(state.state):.2f}"
         except (ValueError, TypeError):
             return "Invalid"
+
+    def _create_task(self, coro: Coroutine) -> asyncio.Task:
+        task = asyncio.create_task(coro)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        return task
 
     async def async_set_native_value(self, value: float) -> None:
         """Set new value (manual override)."""

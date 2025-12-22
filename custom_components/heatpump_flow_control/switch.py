@@ -1,10 +1,11 @@
+"""Switch platform for Heatpump Flow Control integration."""
+
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import (
-    AddConfigEntryEntitiesCallback,
-)
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
+
 from .const import DOMAIN
 
 
@@ -13,11 +14,15 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
+    """Set up the Flow Control switch."""
     async_add_entities([FlowControlActiveSwitch(entry)], True)
 
 
 class FlowControlActiveSwitch(SwitchEntity, RestoreEntity):
+    """Representation of Flow Control Active Switch."""
+
     def __init__(self, entry) -> None:
+        """Initialize the switch."""
         self._entry = entry
         self._attr_name = "Heatpump Flow Control Aktiv"
         self._attr_unique_id = f"{DOMAIN}_{entry.entry_id}_aktiv"
@@ -39,14 +44,17 @@ class FlowControlActiveSwitch(SwitchEntity, RestoreEntity):
 
     @property
     def is_on(self):
+        """Return True if entity is on."""
         return self._attr_is_on
 
     async def async_turn_on(self, **kwargs):
+        """Turn the entity on."""
         self._attr_is_on = True
         self._update_icon()
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs):
+        """Turn the entity off."""
         self._attr_is_on = False
         self._update_icon()
         self.async_write_ha_state()
