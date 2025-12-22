@@ -11,7 +11,7 @@ from homeassistant.core import HomeAssistant
 _LOGGER = logging.getLogger(__name__)
 
 DOMAIN = "heatpump_flow_control"
-PLATFORMS = ["sensor"]
+PLATFORMS = ["number", "switch"]
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:

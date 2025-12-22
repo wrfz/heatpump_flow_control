@@ -58,9 +58,15 @@ class FlowController:
             linear_model.LinearRegression(optimizer=optim.SGD(learning_rate)),
         )
 
-        # Historie für Trend-Berechnung
+        # Historie für Trend-Berechnung (kurz)
         self.aussen_temp_history = []
         self.timestamps = []
+
+        # ERWEITERT: Langzeit-Historie (24 Stunden bei stündlichen Updates = 24 Werte)
+        self.longterm_history_size = 24 * 7  # 1 Woche
+        self.aussen_temp_longterm = []  # Speichert (timestamp, temp) Tupel
+        self.vorlauf_longterm = []  # Speichert (timestamp, vorlauf) Tupel
+        self.raum_temp_longterm = []  # Speichert (timestamp, raum_temp) Tupel
 
         # Metriken
         self.metric = metrics.MAE()
@@ -71,11 +77,12 @@ class FlowController:
         self.min_predictions_for_model = 10
 
         _LOGGER.info(
-            "ML Controller initialisiert: min=%s, max=%s, lr=%s, history=%s",
+            "ML Controller initialisiert: min=%s, max=%s, lr=%s, history=%s, longterm=%s",
             min_vorlauf,
             max_vorlauf,
             learning_rate,
             trend_history_size,
+            self.longterm_history_size,
         )
 
     def _heizkurve_fallback(self, aussen_temp: float, raum_abweichung: float) -> float:
@@ -144,13 +151,31 @@ class FlowController:
     ) -> dict[str, float]:
         """Erstellt Feature-Dictionary für das Model."""
 
-        # Temperatur-Historie aktualisieren
+        now = datetime.now()
+
+        # Temperatur-Historie aktualisieren (kurzfristig)
         self.aussen_temp_history.append(aussen_temp)
-        self.timestamps.append(datetime.now())
+        self.timestamps.append(now)
 
         if len(self.aussen_temp_history) > self.trend_history_size:
             self.aussen_temp_history.pop(0)
             self.timestamps.pop(0)
+
+        # ERWEITERT: Langzeit-Historie aktualisieren (stündlich)
+        # Nur hinzufügen wenn > 30 Min seit letztem Eintrag
+        if (
+            not self.aussen_temp_longterm
+            or (now - self.aussen_temp_longterm[-1][0]).total_seconds() > 1800
+        ):
+            self.aussen_temp_longterm.append((now, aussen_temp))
+            self.vorlauf_longterm.append((now, vorlauf_ist))
+            self.raum_temp_longterm.append((now, raum_ist))
+
+            # Begrenze auf longterm_history_size
+            if len(self.aussen_temp_longterm) > self.longterm_history_size:
+                self.aussen_temp_longterm.pop(0)
+                self.vorlauf_longterm.pop(0)
+                self.raum_temp_longterm.pop(0)
 
         # Trends berechnen
         trends = self._berechne_trends()
@@ -159,7 +184,6 @@ class FlowController:
         raum_abweichung = raum_soll - raum_ist
 
         # Tageszeit als zyklisches Feature
-        now = datetime.now()
         stunde = now.hour + now.minute / 60.0
         stunde_sin = math.sin(2 * math.pi * stunde / 24)
         stunde_cos = math.cos(2 * math.pi * stunde / 24)
@@ -169,7 +193,10 @@ class FlowController:
         wochentag_sin = math.sin(2 * math.pi * wochentag / 7)
         wochentag_cos = math.cos(2 * math.pi * wochentag / 7)
 
-        return {
+        # ERWEITERT: Langzeit-Features berechnen
+        longterm_features = self._berechne_longterm_features(now, stunde)
+
+        features = {
             "aussen_temp": aussen_temp,
             "raum_ist": raum_ist,
             "raum_soll": raum_soll,
@@ -186,6 +213,76 @@ class FlowController:
             "temp_diff": aussen_temp - raum_ist,
             "vorlauf_raum_diff": vorlauf_ist - raum_ist,
         }
+
+        # Langzeit-Features hinzufügen
+        features.update(longterm_features)
+
+        return features
+
+    def _berechne_longterm_features(
+        self, now: datetime, current_hour: float
+    ) -> dict[str, float]:
+        """Berechnet Langzeit-Features aus der Historie.
+
+        Returns:
+            Dictionary mit Langzeit-Features
+        """
+        features = {
+            "temp_24h_ago": 0.0,
+            "temp_24h_avg": 0.0,
+            "temp_7d_avg": 0.0,
+            "temp_same_hour_avg": 0.0,
+            "vorlauf_same_hour_avg": 0.0,
+        }
+
+        if len(self.aussen_temp_longterm) < 2:
+            return features
+
+        # Durchschnittstemperatur letzte 24h
+        temps_24h = [
+            temp
+            for ts, temp in self.aussen_temp_longterm
+            if (now - ts).total_seconds() < 86400
+        ]
+        if temps_24h:
+            features["temp_24h_avg"] = sum(temps_24h) / len(temps_24h)
+
+        # Durchschnittstemperatur letzte 7 Tage
+        if self.aussen_temp_longterm:
+            all_temps = [temp for _, temp in self.aussen_temp_longterm]
+            features["temp_7d_avg"] = sum(all_temps) / len(all_temps)
+
+        # Temperatur vor 24 Stunden (± 2 Stunden Toleranz)
+        for ts, temp in reversed(self.aussen_temp_longterm):
+            hours_ago = (now - ts).total_seconds() / 3600
+            if 22 <= hours_ago <= 26:  # 24h ± 2h
+                features["temp_24h_ago"] = temp
+                break
+
+        # Durchschnitt zur gleichen Tageszeit (± 1 Stunde)
+        same_hour_temps = []
+        same_hour_vorlauf = []
+
+        for i, (ts, temp) in enumerate(self.aussen_temp_longterm):
+            ts_hour = ts.hour + ts.minute / 60.0
+            hour_diff = abs(ts_hour - current_hour)
+            # Berücksichtige Wrap-around (23h und 0h sind nah)
+            if hour_diff > 12:
+                hour_diff = 24 - hour_diff
+
+            if hour_diff <= 1.5:  # ± 1.5 Stunden
+                same_hour_temps.append(temp)
+                if i < len(self.vorlauf_longterm):
+                    same_hour_vorlauf.append(self.vorlauf_longterm[i][1])
+
+        if same_hour_temps:
+            features["temp_same_hour_avg"] = sum(same_hour_temps) / len(same_hour_temps)
+        if same_hour_vorlauf:
+            features["vorlauf_same_hour_avg"] = sum(same_hour_vorlauf) / len(
+                same_hour_vorlauf
+            )
+
+        return features
 
     def berechne_vorlauf_soll(
         self,

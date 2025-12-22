@@ -34,3 +34,5 @@ ATTR_MODEL_MAE = "model_mae"
 ATTR_PREDICTIONS_COUNT = "predictions_count"
 ATTR_LAST_UPDATE = "last_update"
 ATTR_NEXT_UPDATE = "next_update"
+
+CONF_ACTIVE_SWITCH = "active"
