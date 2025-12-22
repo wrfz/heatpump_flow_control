@@ -730,6 +730,9 @@ class FlowController:
         # Backwards compatibility: Stelle sicher, dass alle Attribute existieren
         self._ensure_attributes()
 
+        # Flag um zu tracken ob Model in dieser Berechnung zurückgesetzt wurde
+        model_was_reset = False
+
         features = self._erstelle_features(
             aussen_temp, raum_ist, raum_soll, vorlauf_ist, power_aktuell
         )
@@ -760,20 +763,28 @@ class FlowController:
                         vorlauf_soll,
                         {k: round(v, 3) for k, v in features.items()},
                     )
-                    vorlauf_soll = self._heizkurve_fallback(
-                        aussen_temp, features["raum_abweichung"]
-                    )
-                    # Zurück zum Fallback-Modus wenn Model offensichtlich kaputt ist
-                    if vorlauf_soll > 1000:
+
+                    # Bei extrem unrealistischen Werten: Model ist korrupt, zurücksetzen
+                    if abs(vorlauf_soll) > 1000:
                         _LOGGER.error(
-                            "Model-Output extrem unrealistisch (%.0f°C), aktiviere Fallback-Modus",
+                            "Model-Output extrem unrealistisch (%.0f°C), setze Model zurück",
                             vorlauf_soll,
+                        )
+                        # Model komplett neu initialisieren
+                        self._setup(
+                            min_vorlauf=self.min_vorlauf,
+                            max_vorlauf=self.max_vorlauf,
+                            learning_rate=0.01,  # Default
+                            trend_history_size=self.trend_history_size,
                         )
                         self.use_fallback = True
                         self.predictions_count = 0
-                        vorlauf_soll = self._heizkurve_fallback(
-                            aussen_temp, features["raum_abweichung"]
-                        )
+                        # Diese Vorhersage war ungültig, zählt nicht mit
+                        model_was_reset = True
+
+                    vorlauf_soll = self._heizkurve_fallback(
+                        aussen_temp, features["raum_abweichung"]
+                    )
                 elif self.use_fallback:
                     _LOGGER.info("Wechsel von Heizkurve zu ML-Model")
                     self.use_fallback = False
@@ -787,7 +798,9 @@ class FlowController:
         # Begrenzung auf konfigurierten Bereich
         vorlauf_soll = max(self.min_vorlauf, min(self.max_vorlauf, vorlauf_soll))
 
-        self.predictions_count += 1
+        # Nur inkrementieren wenn Model nicht gerade zurückgesetzt wurde
+        if not model_was_reset:
+            self.predictions_count += 1
 
         # NEU: Speichere diese Entscheidung für späteres Reward-Learning
         if self.reward_learning_enabled:

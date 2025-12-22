@@ -1,8 +1,6 @@
 """Unit tests for number.py."""
 
 import asyncio
-from datetime import timedelta
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 from custom_components.heatpump_flow_control.const import (
@@ -580,9 +578,14 @@ class TestAsyncUpdateVorlaufSoll:
         power_state = MagicMock()
         power_state.state = "1500.0"
 
-        with patch.object(
-            number, "_async_get_sensor_values", return_value=sensor_values
-        ), patch.object(number._controller, "update_power_sensor") as mock_update_power:
+        with (
+            patch.object(
+                number, "_async_get_sensor_values", return_value=sensor_values
+            ),
+            patch.object(
+                number._controller, "update_power_sensor"
+            ) as mock_update_power,
+        ):
             # Mock controller calculation
             mock_features = {
                 "raum_abweichung": 1.0,
@@ -603,9 +606,9 @@ class TestAsyncUpdateVorlaufSoll:
             switch_state = MagicMock()
             switch_state.state = "off"
             mock_hass.states.get.side_effect = [
-                power_state,          # power sensor
-                betriebsart_state,    # betriebsart sensor
-                switch_state,         # control switch
+                power_state,  # power sensor
+                betriebsart_state,  # betriebsart sensor
+                switch_state,  # control switch
             ]
 
             await number._async_update_vorlauf_soll()
