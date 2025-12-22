@@ -19,6 +19,85 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
+class ErfahrungsSpeicher:
+    """Speichert Erfahrungen für verzögertes Reward-basiertes Lernen."""
+
+    def __init__(self, max_size: int = 200) -> None:
+        """Initialize experience storage."""
+        self.erfahrungen = []
+        self.max_size = max_size
+
+    def speichere_erfahrung(
+        self,
+        features: dict[str, float],
+        vorlauf_gesetzt: float,
+        raum_ist_vorher: float,
+        raum_soll: float,
+    ) -> None:
+        """Speichert eine Erfahrung mit Timestamp.
+
+        Args:
+            features: Feature-Dictionary zum Zeitpunkt der Entscheidung
+            vorlauf_gesetzt: Der gesetzte Vorlauf-Wert
+            raum_ist_vorher: Raumtemperatur zum Zeitpunkt der Entscheidung
+            raum_soll: Soll-Raumtemperatur
+        """
+        erfahrung = {
+            "timestamp": datetime.now(),
+            "features": features.copy(),
+            "vorlauf_gesetzt": vorlauf_gesetzt,
+            "raum_ist_vorher": raum_ist_vorher,
+            "raum_soll": raum_soll,
+            "gelernt": False,
+        }
+        self.erfahrungen.append(erfahrung)
+
+        # Begrenze Größe
+        if len(self.erfahrungen) > self.max_size:
+            self.erfahrungen.pop(0)
+
+    def hole_lernbare_erfahrungen(
+        self, min_stunden: float = 2.0, max_stunden: float = 6.0
+    ) -> list:
+        """Gibt Erfahrungen zurück, die alt genug sind zum Lernen.
+
+        Args:
+            min_stunden: Minimales Alter in Stunden
+            max_stunden: Maximales Alter in Stunden
+
+        Returns:
+            Liste von lernbaren Erfahrungen
+        """
+        now = datetime.now()
+        lernbar = []
+
+        for erf in self.erfahrungen:
+            if erf["gelernt"]:
+                continue
+
+            stunden_alt = (now - erf["timestamp"]).total_seconds() / 3600
+            if min_stunden <= stunden_alt <= max_stunden:
+                lernbar.append(erf)
+
+        return lernbar
+
+    def markiere_gelernt(self, erfahrung: dict) -> None:
+        """Markiert eine Erfahrung als gelernt."""
+        erfahrung["gelernt"] = True
+
+    def get_stats(self) -> dict[str, int]:
+        """Gibt Statistiken über den Speicher zurück."""
+        total = len(self.erfahrungen)
+        gelernt = sum(1 for e in self.erfahrungen if e["gelernt"])
+        ungelernt = total - gelernt
+
+        return {
+            "total": total,
+            "gelernt": gelernt,
+            "ungelernt": ungelernt,
+        }
+
+
 class FlowController:
     """ML Controller für Vorlauf-Temperatur Regelung."""
 
@@ -30,6 +109,8 @@ class FlowController:
         trend_history_size: int = DEFAULT_TREND_HISTORY_SIZE,
     ) -> None:
         """Initialize the ML controller."""
+
+        self.use_fallback = True
 
         self._setup(
             min_vorlauf=min_vorlauf,
@@ -76,13 +157,20 @@ class FlowController:
         self.use_fallback = True
         self.min_predictions_for_model = 10
 
+        # NEU: Erfahrungsspeicher für Reward-basiertes Lernen
+        self.erfahrungs_speicher = ErfahrungsSpeicher(max_size=200)
+        self.reward_learning_enabled = True  # Kann deaktiviert werden für Tests
+        self.min_reward_hours = 2.0  # Mindeststunden bis Bewertung
+        self.max_reward_hours = 6.0  # Maximalstunden bis Bewertung
+
         _LOGGER.info(
-            "ML Controller initialisiert: min=%s, max=%s, lr=%s, history=%s, longterm=%s",
+            "_setup(): min=%s, max=%s, lr=%s, history=%s, longterm=%s, reward_learning=%s",
             min_vorlauf,
             max_vorlauf,
             learning_rate,
             trend_history_size,
             self.longterm_history_size,
+            self.reward_learning_enabled,
         )
 
     def _heizkurve_fallback(self, aussen_temp: float, raum_abweichung: float) -> float:
@@ -284,6 +372,158 @@ class FlowController:
 
         return features
 
+    def _bewerte_erfahrung(
+        self,
+        erfahrung: dict,
+        raum_ist_jetzt: float,
+        aussen_trend: float = 0.0,
+    ) -> tuple[float, float]:
+        """Bewertet eine Erfahrung basierend auf dem Ergebnis.
+
+        Args:
+            erfahrung: Die zu bewertende Erfahrung
+            raum_ist_jetzt: Aktuelle Raumtemperatur (2-3h nach Entscheidung)
+            aussen_trend: Aktueller Außentemperatur-Trend
+
+        Returns:
+            tuple: (reward, korrigierter_vorlauf)
+                - reward: -1.0 bis +1.0 (wie gut war die Entscheidung)
+                - korrigierter_vorlauf: Verbesserter Sollwert falls reward < 0
+        """
+        raum_soll = erfahrung["raum_soll"]
+        vorlauf_gesetzt = erfahrung["vorlauf_gesetzt"]
+
+        # Wie groß ist die Abweichung jetzt (2-3h später)?
+        abweichung = raum_ist_jetzt - raum_soll
+        abs_abweichung = abs(abweichung)
+
+        # Bewertung berechnen
+        if abs_abweichung < 0.3:
+            reward = 1.0  # Perfekt!
+        elif abs_abweichung < 0.5:
+            reward = 0.5  # Gut
+        elif abs_abweichung < 0.8:
+            reward = 0.0  # OK
+        elif abs_abweichung < 1.2:
+            reward = -0.5  # Nicht gut
+        else:
+            reward = -1.0  # Schlecht
+
+        # Trend-Anpassung: Bei starken Trends weniger streng bewerten
+        # Wenn Außentemp gefallen ist und Raum zu kalt → War teilweise zu erwarten
+        if aussen_trend < -0.5 and abweichung < -0.5:
+            reward = max(reward, -0.3)  # Nicht zu negativ bewerten
+            _LOGGER.debug(
+                "Trend-Anpassung: Außentemp fiel (%.2f), Raum zu kalt war teilweise erwartbar",
+                aussen_trend,
+            )
+
+        # Wenn Außentemp gestiegen ist und Raum zu warm → War teilweise zu erwarten
+        if aussen_trend > 0.5 and abweichung > 0.5:
+            reward = max(reward, -0.3)  # Nicht zu negativ bewerten
+            _LOGGER.debug(
+                "Trend-Anpassung: Außentemp stieg (%.2f), Raum zu warm war teilweise erwartbar",
+                aussen_trend,
+            )
+
+        # Korrektur berechnen (nur bei schlechtem Ergebnis)
+        if reward < 0:
+            if abweichung < 0:  # Zu kalt → Vorlauf war zu niedrig
+                # Berechne Korrektur: pro 0.5°C Abweichung +2°C Vorlauf
+                korrektur = abs(abweichung) * 4.0
+                korrigierter_vorlauf = vorlauf_gesetzt + korrektur
+            else:  # Zu warm → Vorlauf war zu hoch
+                # Berechne Korrektur: pro 0.5°C Abweichung -1.5°C Vorlauf
+                # (Weniger aggressiv, da Überhitzung träger reagiert)
+                korrektur = abs(abweichung) * 3.0
+                korrigierter_vorlauf = vorlauf_gesetzt - korrektur
+        else:
+            korrigierter_vorlauf = vorlauf_gesetzt
+
+        return reward, korrigierter_vorlauf
+
+    def _lerne_aus_erfahrungen(self, raum_ist_jetzt: float) -> dict[str, int]:
+        """Lernt aus allen verfügbaren Erfahrungen.
+
+        Args:
+            raum_ist_jetzt: Aktuelle Raumtemperatur
+
+        Returns:
+            Statistiken über das Lernen (gelernt_positiv, gelernt_negativ)
+        """
+        if not self.reward_learning_enabled:
+            return {"gelernt_positiv": 0, "gelernt_negativ": 0}
+
+        lernbare = self.erfahrungs_speicher.hole_lernbare_erfahrungen(
+            min_stunden=self.min_reward_hours, max_stunden=self.max_reward_hours
+        )
+
+        stats = {"gelernt_positiv": 0, "gelernt_negativ": 0}
+
+        # Aktuellen Trend für Bewertung holen
+        trends = self._berechne_trends()
+        aussen_trend = trends.get("aussen_trend", 0.0)
+
+        for erfahrung in lernbare:
+            # Bewerte die Erfahrung
+            reward, korrigierter_vorlauf = self._bewerte_erfahrung(
+                erfahrung, raum_ist_jetzt, aussen_trend
+            )
+
+            features = erfahrung["features"]
+
+            try:
+                if reward >= 0:
+                    # Gute Erfahrung: Lerne mit original Vorlauf
+                    # Höheres sample_weight für sehr gute Erfahrungen
+                    sample_weight = 1.0 + reward  # 1.0 bis 2.0
+                    self.model.learn_one(
+                        features,
+                        erfahrung["vorlauf_gesetzt"],
+                        sample_weight=sample_weight,
+                    )
+
+                    stats["gelernt_positiv"] += 1
+
+                    _LOGGER.info(
+                        "✓ Reward-Lernen (Reward=%.1f, Weight=%.1f): Vorlauf %.1f°C war gut",
+                        reward,
+                        sample_weight,
+                        erfahrung["vorlauf_gesetzt"],
+                    )
+                else:
+                    # Schlechte Erfahrung: Lerne mit korrigiertem Vorlauf
+                    sample_weight = abs(reward) * 1.5  # 0.75 bis 1.5
+                    self.model.learn_one(
+                        features, korrigierter_vorlauf, sample_weight=sample_weight
+                    )
+
+                    stats["gelernt_negativ"] += 1
+
+                    _LOGGER.warning(
+                        "✗ Reward-Lernen (Reward=%.1f, Weight=%.1f): Vorlauf %.1f°C → besser %.1f°C",
+                        reward,
+                        sample_weight,
+                        erfahrung["vorlauf_gesetzt"],
+                        korrigierter_vorlauf,
+                    )
+
+                # Markiere als gelernt
+                self.erfahrungs_speicher.markiere_gelernt(erfahrung)
+
+            except Exception as e:
+                _LOGGER.error("Fehler beim Reward-Learning: %s", e)
+
+        if stats["gelernt_positiv"] + stats["gelernt_negativ"] > 0:
+            _LOGGER.info(
+                "Reward-Lernen abgeschlossen: %d positiv, %d negativ (von %d lernbar)",
+                stats["gelernt_positiv"],
+                stats["gelernt_negativ"],
+                len(lernbare),
+            )
+
+        return stats
+
     def berechne_vorlauf_soll(
         self,
         aussen_temp: float,
@@ -344,6 +584,22 @@ class FlowController:
 
         self.predictions_count += 1
 
+        # NEU: Speichere diese Entscheidung für späteres Reward-Learning
+        if self.reward_learning_enabled:
+            self.erfahrungs_speicher.speichere_erfahrung(
+                features=features,
+                vorlauf_gesetzt=vorlauf_soll,
+                raum_ist_vorher=raum_ist,
+                raum_soll=raum_soll,
+            )
+
+        # NEU: Lerne aus alten Erfahrungen (2-6h alt)
+        if self.reward_learning_enabled and self.predictions_count % 2 == 0:
+            # Nur jedes 2. Mal ausführen um Performance zu schonen
+            lern_stats = self._lerne_aus_erfahrungen(raum_ist_jetzt=raum_ist)
+            if lern_stats["gelernt_positiv"] + lern_stats["gelernt_negativ"] > 0:
+                _LOGGER.debug("Reward-Learning Stats: %s", lern_stats)
+
         _LOGGER.info(
             "Vorlauf-Soll berechnet: %.1f°C (Außen: %.1f°C, Raum: %.1f/%.1f°C, Trend: %.2f)",
             vorlauf_soll,
@@ -370,6 +626,11 @@ class FlowController:
         tatsaechlicher_vorlauf: float,
     ) -> None:
         """Lernt aus tatsächlichem Vorlauf-Wert.
+
+        DEPRECATED: Diese Methode wird durch Reward-basiertes Lernen ersetzt.
+        Sie funktioniert noch, aber das neue System (_lerne_aus_erfahrungen)
+        lernt automatisch aus den Ergebnissen und ist robuster gegen
+        falsche Kausalitäten.
 
         Args:
             aussen_temp: Außentemperatur
@@ -405,11 +666,17 @@ class FlowController:
 
     def get_model_stats(self) -> dict[str, float]:
         """Gibt Model-Statistiken zurück."""
+        erfahrungs_stats = self.erfahrungs_speicher.get_stats()
+
         return {
             "mae": self.metric.get() if self.predictions_count > 0 else 0.0,
             "predictions_count": self.predictions_count,
             "use_fallback": self.use_fallback,
             "history_size": len(self.aussen_temp_history),
+            "erfahrungen_total": erfahrungs_stats["total"],
+            "erfahrungen_gelernt": erfahrungs_stats["gelernt"],
+            "erfahrungen_wartend": erfahrungs_stats["ungelernt"],
+            "reward_learning_enabled": self.reward_learning_enabled,
         }
 
     def reset_model(self) -> None:

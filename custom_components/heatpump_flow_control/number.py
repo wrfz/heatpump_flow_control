@@ -480,6 +480,11 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
                 "learning_enabled": current_betriebsart == self._betriebsart_heizen_wert
                 if current_betriebsart
                 else True,
+                # NEU: Reward-Learning Statistiken
+                "reward_learning": model_stats.get("reward_learning_enabled", True),
+                "erfahrungen_total": model_stats.get("erfahrungen_total", 0),
+                "erfahrungen_gelernt": model_stats.get("erfahrungen_gelernt", 0),
+                "erfahrungen_wartend": model_stats.get("erfahrungen_wartend", 0),
             }
 
             # Nach der Berechnung speichern
