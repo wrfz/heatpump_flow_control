@@ -113,8 +113,6 @@ class FlowController:
     ) -> None:
         """Initialize the flow controller."""
 
-        self.use_fallback = True
-
         # Initialisiere power-Attribute VOR _setup() für backwards compatibility
         self.power_history = []
         self.power_enabled = False
@@ -133,8 +131,20 @@ class FlowController:
         max_vorlauf: float = DEFAULT_MAX_VORLAUF,
         learning_rate: float = DEFAULT_LEARNING_RATE,
         trend_history_size: int = DEFAULT_TREND_HISTORY_SIZE,
+        force_fallback: bool = False,
     ) -> None:
-        """Initialize the flow controller."""
+        """Initialize the flow controller.
+
+        Args:
+            min_vorlauf: Minimale Vorlauftemperatur
+            max_vorlauf: Maximale Vorlauftemperatur
+            learning_rate: Learning Rate für das Model
+            trend_history_size: Größe der Trend-Historie
+            force_fallback: Wenn True, erzwinge Fallback-Modus (z.B. bei Model-Reset)
+        """
+
+        # Speichere alten use_fallback Status (für Restart-Persistenz)
+        old_use_fallback = getattr(self, 'use_fallback', None)
 
         self.min_vorlauf = min_vorlauf
         self.max_vorlauf = max_vorlauf
@@ -165,7 +175,20 @@ class FlowController:
         self.predictions_count = 0
 
         # Kaltstart-Heizkurve (fallback)
-        self.use_fallback = True
+        # Intelligente Fallback-Steuerung:
+        # 1. force_fallback=True → Erzwinge Fallback (z.B. nach Model-Reset)
+        # 2. Erster Init (old_use_fallback=None) → Starte mit Fallback
+        # 3. Restart (old_use_fallback!=None) → Behalte alten Status
+        if force_fallback:
+            self.use_fallback = True
+            _LOGGER.info("Fallback erzwungen (Model-Reset)")
+        elif old_use_fallback is None:
+            self.use_fallback = True  # Erster Start
+            _LOGGER.info("Fallback aktiviert (Kaltstart)")
+        else:
+            self.use_fallback = old_use_fallback  # Restart: behalte Status
+            _LOGGER.info("Fallback-Status beibehalten: %s", self.use_fallback)
+
         self.min_predictions_for_model = 10
 
         # NEU: Erfahrungsspeicher für Reward-basiertes Lernen
@@ -776,8 +799,8 @@ class FlowController:
                             max_vorlauf=self.max_vorlauf,
                             learning_rate=0.01,  # Default
                             trend_history_size=self.trend_history_size,
+                            force_fallback=True,  # Erzwinge Fallback nach Reset
                         )
-                        self.use_fallback = True
                         self.predictions_count = 0
                         # Diese Vorhersage war ungültig, zählt nicht mit
                         model_was_reset = True
@@ -907,4 +930,5 @@ class FlowController:
             max_vorlauf=self.max_vorlauf,
             learning_rate=0.01,
             trend_history_size=self.trend_history_size,
+            force_fallback=True,  # Erzwinge Fallback nach manuellem Reset
         )
