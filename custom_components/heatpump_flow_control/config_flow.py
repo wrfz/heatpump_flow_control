@@ -54,6 +54,9 @@ def get_config_schema(defaults=None):
                 selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
             ),
             vol.Optional(
+                "power_sensor", default=defaults.get("power_sensor")
+            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
+            vol.Optional(
                 "min_vorlauf", default=defaults.get("min_vorlauf", 25.0)
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(

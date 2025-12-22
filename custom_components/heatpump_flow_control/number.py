@@ -27,17 +27,21 @@ from .const import (
     ATTR_LAST_UPDATE,
     ATTR_MODEL_MAE,
     ATTR_NEXT_UPDATE,
+    ATTR_POWER_AVG_1H,
+    ATTR_POWER_CURRENT,
+    ATTR_POWER_FAVORABLE,
     ATTR_PREDICTIONS_COUNT,
     ATTR_RAUM_ABWEICHUNG,
     ATTR_RAUM_IST,
     ATTR_RAUM_SOLL,
     ATTR_VORLAUF_IST,
     CONF_AUSSEN_TEMP_SENSOR,
-    CONF_BETRIEBSART_SENSOR,
     CONF_BETRIEBSART_HEIZEN_WERT,
+    CONF_BETRIEBSART_SENSOR,
     CONF_LEARNING_RATE,
     CONF_MAX_VORLAUF,
     CONF_MIN_VORLAUF,
+    CONF_POWER_SENSOR,
     CONF_RAUM_IST_SENSOR,
     CONF_RAUM_SOLL_SENSOR,
     CONF_TREND_HISTORY_SIZE,
@@ -108,6 +112,9 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
         self._betriebsart_heizen_wert = config.get(
             CONF_BETRIEBSART_HEIZEN_WERT, DEFAULT_BETRIEBSART_HEIZEN_WERT
         )
+
+        # Optional: Power-Sensor (PV-Überschuss/Strompreis)
+        self._power_sensor = config.get(CONF_POWER_SENSOR)
 
         # Konfiguration
         self._min_vorlauf = config.get(CONF_MIN_VORLAUF, DEFAULT_MIN_VORLAUF)
@@ -402,16 +409,17 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
             else:
                 raum_soll = float(raum_soll_value)
 
+        except (ValueError, TypeError) as e:
+            _LOGGER.error("Error reading sensor values: %s", e)
+            return None
+
+        else:
             return {
                 "aussen_temp": aussen_temp,
                 "raum_ist": raum_ist,
                 "raum_soll": raum_soll,
                 "vorlauf_ist": vorlauf_ist,
             }
-
-        except (ValueError, TypeError) as e:
-            _LOGGER.error("Error reading sensor values: %s", e)
-            return None
 
     async def _async_update_vorlauf_soll(self) -> None:
         """Update the Vorlauf-Soll value."""
@@ -430,6 +438,20 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
             raum_soll = sensor_values["raum_soll"]
             vorlauf_ist = sensor_values["vorlauf_ist"]
 
+            # NEU: Power-Sensor auslesen (optional)
+            power_aktuell = None
+            if self._power_sensor:
+                power_state = self.hass.states.get(self._power_sensor)
+                if power_state and power_state.state not in ("unavailable", "unknown"):
+                    try:
+                        power_aktuell = float(power_state.state)
+                        self._controller.update_power_sensor(power_aktuell)
+                        _LOGGER.debug("Power-Sensor: %.1f W", power_aktuell)
+                    except ValueError:
+                        _LOGGER.warning(
+                            "Power-Sensor Wert ungültig: %s", power_state.state
+                        )
+
             # Berechne neuen Vorlauf-Soll
             vorlauf_soll, features = await self.hass.async_add_executor_job(
                 self._controller.berechne_vorlauf_soll,
@@ -437,6 +459,7 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
                 raum_ist,
                 raum_soll,
                 vorlauf_ist,
+                power_aktuell,
             )
 
             # Update state
@@ -485,6 +508,19 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
                 "erfahrungen_total": model_stats.get("erfahrungen_total", 0),
                 "erfahrungen_gelernt": model_stats.get("erfahrungen_gelernt", 0),
                 "erfahrungen_wartend": model_stats.get("erfahrungen_wartend", 0),
+                # NEU: Power-Statistiken (wenn aktiviert)
+                ATTR_POWER_CURRENT: round(power_aktuell, 1)
+                if power_aktuell is not None
+                else None,
+                ATTR_POWER_AVG_1H: round(features.get("power_avg_1h", 0), 1)
+                if self._power_sensor
+                else None,
+                ATTR_POWER_FAVORABLE: round(
+                    features.get("power_favorable_hours", 0) * 100, 1
+                )
+                if self._power_sensor
+                else None,
+                "power_enabled": self._controller.power_enabled,
             }
 
             # Nach der Berechnung speichern

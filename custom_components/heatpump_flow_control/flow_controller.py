@@ -33,6 +33,7 @@ class ErfahrungsSpeicher:
         vorlauf_gesetzt: float,
         raum_ist_vorher: float,
         raum_soll: float,
+        power_aktuell: float | None = None,
     ) -> None:
         """Speichert eine Erfahrung mit Timestamp.
 
@@ -41,6 +42,7 @@ class ErfahrungsSpeicher:
             vorlauf_gesetzt: Der gesetzte Vorlauf-Wert
             raum_ist_vorher: Raumtemperatur zum Zeitpunkt der Entscheidung
             raum_soll: Soll-Raumtemperatur
+            power_aktuell: Aktuelle Leistung (positiv=Netzbezug, negativ=Einspeisung)
         """
         erfahrung = {
             "timestamp": datetime.now(),
@@ -48,6 +50,7 @@ class ErfahrungsSpeicher:
             "vorlauf_gesetzt": vorlauf_gesetzt,
             "raum_ist_vorher": raum_ist_vorher,
             "raum_soll": raum_soll,
+            "power_aktuell": power_aktuell,
             "gelernt": False,
         }
         self.erfahrungen.append(erfahrung)
@@ -149,6 +152,10 @@ class FlowController:
         self.vorlauf_longterm = []  # Speichert (timestamp, vorlauf) Tupel
         self.raum_temp_longterm = []  # Speichert (timestamp, raum_temp) Tupel
 
+        # NEU: Power-Historie (Strompreis/PV-Überschuss)
+        self.power_history = []  # Speichert (timestamp, power) Tupel
+        self.power_enabled = False  # Wird auf True gesetzt wenn Sensor konfiguriert
+
         # Metriken
         self.metric = metrics.MAE()
         self.predictions_count = 0
@@ -164,13 +171,14 @@ class FlowController:
         self.max_reward_hours = 6.0  # Maximalstunden bis Bewertung
 
         _LOGGER.info(
-            "_setup(): min=%s, max=%s, lr=%s, history=%s, longterm=%s, reward_learning=%s",
+            "_setup(): min=%s, max=%s, lr=%s, history=%s, longterm=%s, reward_learning=%s, power=%s",
             min_vorlauf,
             max_vorlauf,
             learning_rate,
             trend_history_size,
             self.longterm_history_size,
             self.reward_learning_enabled,
+            self.power_enabled,
         )
 
     def _heizkurve_fallback(self, aussen_temp: float, raum_abweichung: float) -> float:
@@ -236,8 +244,17 @@ class FlowController:
         raum_ist: float,
         raum_soll: float,
         vorlauf_ist: float,
+        power_aktuell: float | None = None,
     ) -> dict[str, float]:
-        """Erstellt Feature-Dictionary für das Model."""
+        """Erstellt Feature-Dictionary für das Model.
+
+        Args:
+            aussen_temp: Außentemperatur
+            raum_ist: Ist-Raumtemperatur
+            raum_soll: Soll-Raumtemperatur
+            vorlauf_ist: Ist-Vorlauf
+            power_aktuell: Aktuelle Leistung (positiv=Netzbezug, negativ=Einspeisung)
+        """
 
         now = datetime.now()
 
@@ -284,6 +301,9 @@ class FlowController:
         # ERWEITERT: Langzeit-Features berechnen
         longterm_features = self._berechne_longterm_features(now, stunde)
 
+        # NEU: Power-Features berechnen (wenn aktiviert)
+        power_features = self._berechne_power_features(now, stunde, power_aktuell)
+
         features = {
             "aussen_temp": aussen_temp,
             "raum_ist": raum_ist,
@@ -304,6 +324,9 @@ class FlowController:
 
         # Langzeit-Features hinzufügen
         features.update(longterm_features)
+
+        # Power-Features hinzufügen
+        features.update(power_features)
 
         return features
 
@@ -372,6 +395,110 @@ class FlowController:
 
         return features
 
+    def _berechne_power_features(
+        self, now: datetime, current_hour: float, power_aktuell: float | None
+    ) -> dict[str, float]:
+        """Berechnet Power-basierte Features (PV-Überschuss/Strompreis).
+
+        WICHTIG: Verwendet NICHT den aktuellen Power-Wert als Feature, um
+        "falsch herum lernen" zu vermeiden. Stattdessen werden historische
+        Durchschnittswerte zur gleichen Tageszeit verwendet.
+
+        Args:
+            now: Aktueller Zeitpunkt
+            current_hour: Aktuelle Stunde (0-24)
+            power_aktuell: Aktueller Leistungswert (nur für Historie-Update)
+
+        Returns:
+            Dictionary mit Power-Features
+        """
+        features = {
+            "power_avg_same_hour": 0.0,  # Durchschnitt zur gleichen Tageszeit
+            "power_avg_1h": 0.0,  # Durchschnitt letzte 1h
+            "power_avg_3h": 0.0,  # Durchschnitt letzte 3h
+            "power_favorable_hours": 0.0,  # Anteil günstiger Stunden heute
+        }
+
+        if not self.power_enabled or not self.power_history:
+            return features
+
+        # Power-Historie aktualisieren (alle 10 Minuten)
+        if power_aktuell is not None:
+            if (
+                not self.power_history
+                or (now - self.power_history[-1][0]).total_seconds() > 600
+            ):
+                self.power_history.append((now, power_aktuell))
+
+                # Begrenze auf longterm_history_size
+                if (
+                    len(self.power_history) > self.longterm_history_size * 6
+                ):  # 10-min Intervalle
+                    self.power_history.pop(0)
+
+        # Durchschnitt zur gleichen Tageszeit (± 1.5h) - DAS lernt das Model!
+        same_hour_power = []
+        for ts, power in self.power_history:
+            ts_hour = ts.hour + ts.minute / 60.0
+            hour_diff = abs(ts_hour - current_hour)
+            if hour_diff > 12:
+                hour_diff = 24 - hour_diff
+
+            if hour_diff <= 1.5:  # ± 1.5 Stunden
+                same_hour_power.append(power)
+
+        if same_hour_power:
+            features["power_avg_same_hour"] = sum(same_hour_power) / len(
+                same_hour_power
+            )
+
+        # Durchschnitt letzte 1h
+        power_1h = [
+            power
+            for ts, power in self.power_history
+            if (now - ts).total_seconds() < 3600
+        ]
+        if power_1h:
+            features["power_avg_1h"] = sum(power_1h) / len(power_1h)
+
+        # Durchschnitt letzte 3h
+        power_3h = [
+            power
+            for ts, power in self.power_history
+            if (now - ts).total_seconds() < 10800
+        ]
+        if power_3h:
+            features["power_avg_3h"] = sum(power_3h) / len(power_3h)
+
+        # Anteil günstiger Stunden (negative Werte = Einspeisung) heute
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        power_today = [power for ts, power in self.power_history if ts >= today_start]
+        if power_today:
+            favorable_count = sum(1 for p in power_today if p < 0)  # Einspeisung
+            features["power_favorable_hours"] = favorable_count / len(power_today)
+
+        _LOGGER.debug(
+            "Power-Features: same_hour_avg=%.1f, 1h_avg=%.1f, favorable=%.1f%%",
+            features["power_avg_same_hour"],
+            features["power_avg_1h"],
+            features["power_favorable_hours"] * 100,
+        )
+
+        return features
+
+    def update_power_sensor(self, power_value: float | None) -> None:
+        """Aktiviert/deaktiviert Power-Sensor.
+
+        Args:
+            power_value: Aktueller Power-Wert oder None um zu deaktivieren
+        """
+        if power_value is None:
+            self.power_enabled = False
+            _LOGGER.info("Power-Sensor deaktiviert")
+        else:
+            self.power_enabled = True
+            _LOGGER.debug("Power-Sensor aktiviert: %.1f W", power_value)
+
     def _bewerte_erfahrung(
         self,
         erfahrung: dict,
@@ -425,6 +552,40 @@ class FlowController:
                 "Trend-Anpassung: Außentemp stieg (%.2f), Raum zu warm war teilweise erwartbar",
                 aussen_trend,
             )
+
+        # NEU: Power-basierte Reward-Anpassung
+        if (
+            self.power_enabled
+            and "power_aktuell" in erfahrung
+            and erfahrung["power_aktuell"] is not None
+        ):
+            power_damals = erfahrung["power_aktuell"]
+
+            # Bonus: Bei günstigen Strom (Einspeisung/PV-Überschuss) mehr geheizt
+            if (
+                power_damals < -500 and reward >= 0
+            ):  # Einspeisung > 500W und gutes Ergebnis
+                reward = min(1.0, reward + 0.2)  # Bonus für PV-Nutzung
+                _LOGGER.debug(
+                    "Power-Bonus: Bei PV-Überschuss (%.0f W) wurde vorgeheizt - gut!",
+                    power_damals,
+                )
+
+            # Bonus: Bei teuerem Strom (Netzbezug) weniger geheizt und Raum trotzdem OK
+            elif power_damals > 1000 and reward >= 0:  # Netzbezug > 1kW
+                # Prüfe ob Vorlauf niedriger war als üblich zur gleichen Tageszeit
+                vorlauf_avg_same_hour = erfahrung["features"].get(
+                    "vorlauf_same_hour_avg", 0
+                )
+                if (
+                    vorlauf_avg_same_hour > 0
+                    and vorlauf_gesetzt < vorlauf_avg_same_hour
+                ):
+                    reward = min(1.0, reward + 0.15)  # Bonus für Strom-Sparen
+                    _LOGGER.debug(
+                        "Power-Bonus: Bei Netzbezug (%.0f W) wurde gespart - gut!",
+                        power_damals,
+                    )
 
         # Korrektur berechnen (nur bei schlechtem Ergebnis)
         if reward < 0:
@@ -530,15 +691,23 @@ class FlowController:
         raum_ist: float,
         raum_soll: float,
         vorlauf_ist: float,
+        power_aktuell: float | None = None,
     ) -> tuple[float, dict[str, float]]:
         """Berechnet optimalen Vorlauf-Sollwert.
+
+        Args:
+            aussen_temp: Außentemperatur
+            raum_ist: Ist-Raumtemperatur
+            raum_soll: Soll-Raumtemperatur
+            vorlauf_ist: Ist-Vorlauf
+            power_aktuell: Aktuelle Leistung (positiv=Netzbezug, negativ=Einspeisung)
 
         Returns:
             tuple: (vorlauf_soll, features_dict)
         """
 
         features = self._erstelle_features(
-            aussen_temp, raum_ist, raum_soll, vorlauf_ist
+            aussen_temp, raum_ist, raum_soll, vorlauf_ist, power_aktuell
         )
 
         # Während Kaltstart: Heizkurve verwenden
@@ -591,6 +760,7 @@ class FlowController:
                 vorlauf_gesetzt=vorlauf_soll,
                 raum_ist_vorher=raum_ist,
                 raum_soll=raum_soll,
+                power_aktuell=power_aktuell,
             )
 
         # NEU: Lerne aus alten Erfahrungen (2-6h alt)
