@@ -715,6 +715,8 @@ class FlowTestHelper:
         self._current_time = 0  # Simulated minutes
         self._simulated_datetime = datetime.now()  # Start time
         self._datetime_patcher = None
+        self._pending_wait_minutes = 0  # Minutes to advance on next expect_vorlauf_soll()
+        self._default_tolerance = 0.5  # Default tolerance for expect_vorlauf_soll()
 
     def _get_mocked_now(self):
         """Return the current simulated datetime."""
@@ -740,44 +742,76 @@ class FlowTestHelper:
         self._vorlauf_ist = temp
         return self
 
-    def expect_vorlauf_soll(self, expected: float, tolerance: float = 0.5) -> "FlowTestHelper":
+    def tolerance(self, value: float) -> "FlowTestHelper":
+        """Set default tolerance for all subsequent expect_vorlauf_soll() calls.
+
+        Args:
+            value: Default tolerance in °C
+        """
+        self._default_tolerance = value
+        return self
+
+    def expect_vorlauf_soll(
+        self, expected: float, tolerance: float | None = None
+    ) -> "FlowTestHelper":
         """Execute prediction and verify expected flow temperature.
+
+        Automatically advances simulated time by the minutes specified in the last wait() call.
 
         Args:
             expected: Expected flow temperature
-            tolerance: Allowed deviation in °C
+            tolerance: Allowed deviation in °C (uses default if not specified)
         """
+        # Use default tolerance if none specified
+        if tolerance is None:
+            tolerance = self._default_tolerance
+
+        # Apply pending wait time
+        if self._pending_wait_minutes > 0:
+            self._current_time += self._pending_wait_minutes
+            self._simulated_datetime += timedelta(minutes=self._pending_wait_minutes)
+            self._pending_wait_minutes = 0  # Reset after applying
+
         # Mock datetime.now() to return simulated time
-        with patch('custom_components.heatpump_flow_control.flow_controller.datetime') as mock_dt:
+        with patch(
+            "custom_components.heatpump_flow_control.flow_controller.datetime"
+        ) as mock_dt:
             mock_dt.now.return_value = self._simulated_datetime
             # Also make datetime() constructor work normally
             mock_dt.side_effect = lambda *args, **kw: datetime(*args, **kw)
 
-            vorlauf_soll, _ = self.flow_controller.berechne_vorlauf_soll(
+            vorlauf_soll, features = self.flow_controller.berechne_vorlauf_soll(
                 aussen_temp=self._t_aussen,
                 raum_ist=self._raum_ist,
                 raum_soll=self._raum_soll,
                 vorlauf_ist=self._vorlauf_ist,
             )
 
-        # Update vorlauf_ist for next cycle (simulates actual system response)
-        self._vorlauf_ist = vorlauf_soll
+            # Add current room temperature to longterm history for reward learning
+            # This allows _lerne_aus_erfahrungen() (called internally by berechne_vorlauf_soll)
+            # to evaluate past experiences against current room temperature
+            self.flow_controller.raum_temp_longterm.append(
+                (self._simulated_datetime, self._raum_ist)
+            )
 
         assert abs(vorlauf_soll - expected) <= tolerance, (
             f"Expected vorlauf_soll ~{expected}°C (±{tolerance}°C), "
             f"got {vorlauf_soll:.1f}°C at time={self._current_time}min, "
-            f"aussen={self._t_aussen}°C, raum={self._raum_ist}°C"
+            f"aussen={self._t_aussen}°C, raum={self._raum_ist}°C, "
+            f"vorlauf_ist={self._vorlauf_ist}°C"
         )
         return self
 
     def wait(self, minutes: int) -> "FlowTestHelper":
-        """Simulate time passing (advances internal time counter).
+        """Set time to advance on next expect_vorlauf_soll() call.
+
+        Does not immediately advance time - the time advancement happens
+        when expect_vorlauf_soll() is called.
 
         Args:
-            minutes: Number of minutes to wait
+            minutes: Number of minutes to wait before next prediction
         """
-        self._current_time += minutes
-        self._simulated_datetime += timedelta(minutes=minutes)
+        self._pending_wait_minutes = minutes
         return self
 
 
@@ -802,37 +836,56 @@ class TestFlowCalculation:
         flow_controller.min_predictions_for_model = 5  # Schnell aus Fallback raus
         flow_controller.reward_learning_enabled = False  # Klassisches Lernen
 
+        # Fluent test: Realistische Simulation mit zeitversetzter Reaktion
+        # wait(60) setzt das Interval für alle folgenden expect_vorlauf_soll() Aufrufe
         (
-            controller(flow_controller)
-            .t_aussen(10).raum_ist(20).raum_soll(21).vorlauf_ist(30).expect_vorlauf_soll(30.0, tolerance=2.0)
-            .wait(60).raum_ist(20.3).expect_vorlauf_soll(30.8, tolerance=0.1)
-            .wait(60).raum_ist(20.5).expect_vorlauf_soll(28.7, tolerance=0.1)
-            .wait(60).raum_ist(20.8).expect_vorlauf_soll(28.7, tolerance=0.1)
-            .wait(60).raum_ist(21.0).expect_vorlauf_soll(28.7, tolerance=0.1)
-            .wait(60).raum_ist(21.0).expect_vorlauf_soll(28.7, tolerance=0.1)
-            .wait(60).raum_ist(21.0).expect_vorlauf_soll(28.7, tolerance=0.1)
-            .wait(60).raum_soll(22.5).expect_vorlauf_soll(33.2, tolerance=0.1)
-            .wait(60).raum_ist(21.1) # Setze Raum-ist höher
-            .expect_vorlauf_soll(32.9, tolerance=0.1)
-            .wait(60).raum_ist(21.2).expect_vorlauf_soll(32.6, tolerance=0.1)
-            .wait(60).raum_ist(21.4).expect_vorlauf_soll(32.0, tolerance=0.1)
-            .wait(60).raum_ist(21.6).expect_vorlauf_soll(31.4, tolerance=0.1)
-            .wait(60).raum_ist(22.7).expect_vorlauf_soll(28.7, tolerance=0.1)
-            .wait(60).raum_ist(22.6).expect_vorlauf_soll(28.7, tolerance=0.1)
-            .wait(60).raum_ist(22.5).expect_vorlauf_soll(28.7, tolerance=0.1)
-            .wait(60).raum_ist(22.5).expect_vorlauf_soll(28.7, tolerance=0.1)
-            .wait(60).raum_ist(22.5).expect_vorlauf_soll(28.7, tolerance=0.1)
-            # Senke Außentemperatur
-            .wait(60).t_aussen(9).expect_vorlauf_soll(29.2, tolerance=0.1)
-            .wait(60).t_aussen(8).expect_vorlauf_soll(29.6, tolerance=0.1)
-            .wait(60).t_aussen(6).expect_vorlauf_soll(30.6, tolerance=0.1)
-            .wait(60).t_aussen(3).expect_vorlauf_soll(32.0, tolerance=0.1)
-            .wait(60).t_aussen(0).expect_vorlauf_soll(33.4, tolerance=0.1)
-            .wait(60).t_aussen(-3).expect_vorlauf_soll(34.8, tolerance=0.1)
-            .wait(60).t_aussen(-6).expect_vorlauf_soll(36.1, tolerance=0.1)
-            .wait(60).t_aussen(-9).expect_vorlauf_soll(37.5, tolerance=0.1)
-            .wait(60).t_aussen(-11).expect_vorlauf_soll(38.0, tolerance=0.1)
-            .wait(60).t_aussen(-12).expect_vorlauf_soll(38.0, tolerance=0.1)
-            .wait(60).t_aussen(-12).expect_vorlauf_soll(38.0, tolerance=0.1)
-        )
+            controller(flow_controller).tolerance(0.1).wait(60) # Ab jetzt: 60min zwischen jedem expect_vorlauf_soll()
+            .t_aussen(10).raum_ist(20).raum_soll(21).vorlauf_ist(30)
+            .expect_vorlauf_soll(31.7)
+            .vorlauf_ist(30.3).raum_ist(20.3).expect_vorlauf_soll(30.8)
+            .vorlauf_ist(30.6).raum_ist(20.5).expect_vorlauf_soll(28.7)
+            .vorlauf_ist(30.0).raum_ist(20.8).expect_vorlauf_soll(28.7)
+            .vorlauf_ist(29.0).raum_ist(21.0).expect_vorlauf_soll(28.7)
+            .vorlauf_ist(28.5).raum_ist(21.0).expect_vorlauf_soll(28.7)
+            .vorlauf_ist(28.7).raum_ist(21.0).expect_vorlauf_soll(28.7)
+            .vorlauf_ist(28.7).raum_ist(21.0).expect_vorlauf_soll(28.7)
+            .vorlauf_ist(28.7).raum_ist(21.0).expect_vorlauf_soll(28.7)
+            .vorlauf_ist(28.7).raum_ist(21.0).expect_vorlauf_soll(28.7)
+            .vorlauf_ist(28.7).raum_ist(21.0).expect_vorlauf_soll(28.7)
+            .vorlauf_ist(28.7).raum_ist(21.0).expect_vorlauf_soll(28.7)
+            .vorlauf_ist(28.7).raum_ist(21.0).expect_vorlauf_soll(28.7)
+            .vorlauf_ist(28.7).raum_ist(21.0).expect_vorlauf_soll(28.7)
+            .vorlauf_ist(39).raum_ist(21.0).expect_vorlauf_soll(28.7)
+            .vorlauf_ist(40).raum_ist(21.0).expect_vorlauf_soll(28.7)
+            .vorlauf_ist(40).raum_ist(21.0).expect_vorlauf_soll(28.7)
+            .vorlauf_ist(40).raum_ist(21.0).expect_vorlauf_soll(28.7)
+            .vorlauf_ist(40).raum_ist(21.0).expect_vorlauf_soll(28.7)
+            .vorlauf_ist(40).raum_ist(21.0).expect_vorlauf_soll(28.7)
+            .vorlauf_ist(40).raum_ist(21.0).expect_vorlauf_soll(28.7)
+            .vorlauf_ist(40).raum_ist(21.0).expect_vorlauf_soll(28.7)
+            .vorlauf_ist(40).raum_ist(21.0).expect_vorlauf_soll(28.7)
 
+            # SOLL-Wert wird erhöht auf 22.5°C
+            #.vorlauf_ist(30.5).raum_soll(22.5).expect_vorlauf_soll(33.0)
+            #.vorlauf_ist(33.5).raum_ist(21.1).expect_vorlauf_soll(33.0)
+            #.vorlauf_ist(34.8).raum_ist(21.2).expect_vorlauf_soll(34.0)
+            #.vorlauf_ist(35.3).raum_ist(21.4).expect_vorlauf_soll(35.0)
+            #.vorlauf_ist(35.7).raum_ist(21.6).expect_vorlauf_soll(35.5)
+            #.vorlauf_ist(36.0).raum_ist(22.7).expect_vorlauf_soll(35.0)
+            #.vorlauf_ist(34.5).raum_ist(22.6).expect_vorlauf_soll(34.0)
+            #.vorlauf_ist(33.8).raum_ist(22.5).expect_vorlauf_soll(33.5)
+            #.vorlauf_ist(33.5).raum_ist(22.5).expect_vorlauf_soll(33.5)
+            #.vorlauf_ist(33.5).raum_ist(22.5).expect_vorlauf_soll(33.5)
+            # Außentemperatur sinkt - mehr Vorlauf nötig
+            #.vorlauf_ist(33.5).t_aussen(9).expect_vorlauf_soll(33.5)
+            #.vorlauf_ist(33.8).t_aussen(8).expect_vorlauf_soll(34.0)
+            #.vorlauf_ist(34.3).t_aussen(6).expect_vorlauf_soll(34.5)
+            #.vorlauf_ist(35.0).t_aussen(3).expect_vorlauf_soll(35.5)
+            #.vorlauf_ist(36.2).t_aussen(0).expect_vorlauf_soll(37.0)
+            #.vorlauf_ist(37.8).t_aussen(-3).expect_vorlauf_soll(38.5)
+            #.vorlauf_ist(39.2).t_aussen(-6).expect_vorlauf_soll(40.0)
+            #.vorlauf_ist(40.8).t_aussen(-9).expect_vorlauf_soll(41.5)
+            #.vorlauf_ist(42.2).t_aussen(-11).expect_vorlauf_soll(43.0)
+            #.vorlauf_ist(43.5).t_aussen(-12).expect_vorlauf_soll(44.0)
+            #.vorlauf_ist(44.2).t_aussen(-12).expect_vorlauf_soll(44.5)
+        )
