@@ -62,13 +62,13 @@ from .const import (
     DOMAIN,
 )
 from .flow_controller import FlowController
+from .types import SensorValues
 
 # pylint: disable=hass-logger-capital, hass-logger-period
 # ruff: noqa: BLE001
 # ruff: logging-redundant-exc-info
 
 _LOGGER = logging.getLogger(__name__)
-
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -167,7 +167,8 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
 
     async def async_added_to_hass(self) -> None:
         """Run when entity about to be added to hass."""
-        # ML Model laden
+        _LOGGER.info("async_added_to_hass()")
+
         await self._async_load_model()
 
         await super().async_added_to_hass()
@@ -207,6 +208,43 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
         # Sofortiges erstes Update nach 5 Sekunden
         self._create_task(self._delayed_first_update())
 
+    async def async_set_native_value(self, value: float) -> None:
+        """Set new value (manual override)."""
+
+        _LOGGER.info("async_set_native_value(%.2f)", value)
+
+        self._attr_native_value = value
+        self._last_vorlauf_soll = value
+
+        # Bei manueller Änderung auch direkt senden (unabhängig vom Switch)
+        await self._async_set_vorlauf_soll(value)
+        self.async_write_ha_state()
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Run when entity will be removed from hass."""
+        _LOGGER.info("async_will_remove_from_hass())")
+
+        if self._update_interval_listener:
+            self._update_interval_listener()
+        if self._state_change_listener:
+            self._state_change_listener()
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the state attributes."""
+
+        _LOGGER.info("extra_state_attributes()")
+        _LOGGER.info(self._extra_attributes)
+
+        return self._extra_attributes
+
+    @property
+    def available(self) -> bool:
+        """Return True if entity is available."""
+        return self._available
+
+    # Private methods
+
     async def _delayed_first_update(self):
         """First update after startup with delay."""
         await asyncio.sleep(5)
@@ -215,8 +253,10 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
     async def _async_load_model(self) -> None:
         """Lädt das Modell."""
 
-        def _load():
-            _LOGGER.info("Loading ML model from %s", self._model_path)
+        _LOGGER.info("_async_load_model()")
+
+        def _load() -> FlowController | None:
+            _LOGGER.info("Loading model from %s", self._model_path)
 
             if not self._model_path.exists():
                 _LOGGER.info("No saved model found, starting fresh")
@@ -225,7 +265,6 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
             try:
                 with self._model_path.open("rb") as f:
                     loaded = pickle.load(f)
-                    # Erzwinge Model-Nutzung nach dem Laden
                     loaded.use_fallback = False
                     loaded.min_predictions_for_model = 0
                     return loaded
@@ -237,7 +276,7 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
         if loaded_controller:
             self._controller = loaded_controller
             _LOGGER.info(
-                "ML model loaded (Predictions: %d)", loaded_controller.predictions_count
+                "Model loaded (Predictions: %d)", loaded_controller.predictions_count
             )
 
     async def _async_save_model(self) -> None:
@@ -248,23 +287,18 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
                 self._model_path.parent.mkdir(parents=True, exist_ok=True)
 
                 with self._model_path.open("wb") as f:
-                    _LOGGER.debug("Saving ML model to %s", self._model_path)
+                    _LOGGER.debug("Saving model to %s", self._model_path)
                     pickle.dump(self._controller, f)
             except Exception as err:
-                _LOGGER.error("Error saving ML model: %s", err)
+                _LOGGER.error("Error saving model: %s", err)
 
         await self.hass.async_add_executor_job(_save)
-
-    async def async_will_remove_from_hass(self) -> None:
-        """Run when entity will be removed from hass."""
-        if self._update_interval_listener:
-            self._update_interval_listener()
-        if self._state_change_listener:
-            self._state_change_listener()
 
     @callback
     def _async_sensor_state_changed(self, event) -> None:
         """Handle sensor state changes for learning."""
+
+        _LOGGER.info("_async_sensor_state_changed()")
 
         # Ignoriere unavailable/unknown states
         new_state = event.data.get("new_state")
@@ -277,6 +311,9 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
 
     async def _check_and_update_if_ready(self):
         """Check if all sensors are ready and trigger update."""
+
+        _LOGGER.info("_check_and_update_if_ready()")
+
         sensor_values = await self._async_get_sensor_values()
         if sensor_values is not None:
             _LOGGER.info("All sensors now available, triggering update")
@@ -319,8 +356,11 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
 
         return is_heating
 
-    async def _async_get_sensor_values(self) -> dict[str, float] | None:
+    async def _async_get_sensor_values(self) -> SensorValues | None:
         """Get current values from all sensors."""
+
+        _LOGGER.info("_async_get_sensor_values()")
+
         try:
             aussen_temp_state = self.hass.states.get(self._aussen_temp_sensor)
             raum_ist_state = self.hass.states.get(self._raum_ist_sensor)
@@ -378,29 +418,20 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
             return None
 
         else:
-            return {
-                "aussen_temp": aussen_temp,
-                "raum_ist": raum_ist,
-                "raum_soll": raum_soll,
-                "vorlauf_ist": vorlauf_ist,
-            }
+            return SensorValues(aussen_temp=aussen_temp, raum_ist=raum_ist, raum_soll=raum_soll, vorlauf_ist=vorlauf_ist)
 
     async def _async_update_vorlauf_soll(self, now=None) -> None:
         """Update the Vorlauf-Soll value."""
-        try:
-            _LOGGER.info("_async_update_vorlauf_soll()")
 
+        _LOGGER.info("_async_update_vorlauf_soll()")
+
+        try:
             sensor_values = await self._async_get_sensor_values()
             if sensor_values is None:
                 _LOGGER.warning("sensor_values is None, setting unavailable")
                 self._available = False
                 self.async_write_ha_state()
                 return
-
-            aussen_temp = sensor_values["aussen_temp"]
-            raum_ist = sensor_values["raum_ist"]
-            raum_soll = sensor_values["raum_soll"]
-            vorlauf_ist = sensor_values["vorlauf_ist"]
 
             # NEU: Power-Sensor auslesen (optional)
             power_aktuell = None
@@ -419,10 +450,7 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
             # Berechne neuen Vorlauf-Soll
             vorlauf_soll, features = await self.hass.async_add_executor_job(
                 self._controller.berechne_vorlauf_soll,
-                aussen_temp,
-                raum_ist,
-                raum_soll,
-                vorlauf_ist,
+                sensor_values,
                 power_aktuell,
             )
 
@@ -449,20 +477,20 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
                     current_betriebsart = betriebsart_state.state
 
             self._extra_attributes = {
-                ATTR_AUSSEN_TEMP: round(aussen_temp, 1),
-                ATTR_RAUM_IST: round(raum_ist, 1),
-                ATTR_RAUM_SOLL: round(raum_soll, 1),
-                ATTR_VORLAUF_IST: round(vorlauf_ist, 1),
+                ATTR_AUSSEN_TEMP: round(sensor_values.aussen_temp, 1),
+                ATTR_RAUM_IST: round(sensor_values.raum_ist, 1),
+                ATTR_RAUM_SOLL: round(sensor_values.raum_soll, 1),
+                ATTR_VORLAUF_IST: round(sensor_values.vorlauf_ist, 1),
                 ATTR_RAUM_ABWEICHUNG: round(features["raum_abweichung"], 2),
                 ATTR_AUSSEN_TREND: round(features["aussen_trend"], 3),
                 ATTR_AUSSEN_TREND_5MIN: round(features["aussen_trend_kurz"], 3),
                 ATTR_AUSSEN_TREND_30MIN: round(features["aussen_trend_mittel"], 3),
-                ATTR_MODEL_MAE: round(model_stats["mae"], 2),
-                ATTR_PREDICTIONS_COUNT: model_stats["predictions_count"],
+                ATTR_MODEL_MAE: round(model_stats.mae, 2),
+                ATTR_PREDICTIONS_COUNT: model_stats.predictions_count,
                 ATTR_LAST_UPDATE: self._last_update.isoformat(),
                 ATTR_NEXT_UPDATE: self._next_update.isoformat(),
-                "use_fallback": model_stats["use_fallback"],
-                "history_size": model_stats["history_size"],
+                "use_fallback": model_stats.use_fallback,
+                "history_size": model_stats.history_size,
                 "betriebsart": current_betriebsart,
                 "learning_enabled": current_betriebsart == self._betriebsart_heizen_wert
                 if current_betriebsart
@@ -527,9 +555,9 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
             _LOGGER.info(
                 "Vorlauf-Soll updated: %.1f°C (Außen: %.1f°C, Raum: %.1f/%.1f°C)",
                 vorlauf_soll,
-                aussen_temp,
-                raum_ist,
-                raum_soll,
+                sensor_values.aussen_temp,
+                sensor_values.raum_ist,
+                sensor_values.raum_soll,
             )
 
         except Exception:
@@ -539,6 +567,9 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
 
     async def _async_set_vorlauf_soll(self, value: float) -> None:
         """Set the Vorlauf-Soll on the target entity."""
+
+        _LOGGER.info("_async_update_vorlauf_soll()")
+
         try:
             target_entity = self.hass.states.get(self._vorlauf_soll_entity)
             if target_entity is None:
@@ -594,23 +625,3 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         return task
-
-    async def async_set_native_value(self, value: float) -> None:
-        """Set new value (manual override)."""
-
-        self._attr_native_value = value
-        self._last_vorlauf_soll = value
-
-        # Bei manueller Änderung auch direkt senden (unabhängig vom Switch)
-        await self._async_set_vorlauf_soll(value)
-        self.async_write_ha_state()
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        """Return the state attributes."""
-        return self._extra_attributes
-
-    @property
-    def available(self) -> bool:
-        """Return True if entity is available."""
-        return self._available

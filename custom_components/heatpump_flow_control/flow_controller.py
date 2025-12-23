@@ -12,6 +12,7 @@ from .const import (
     DEFAULT_MIN_VORLAUF,
     DEFAULT_TREND_HISTORY_SIZE,
 )
+from .types import ModelStats, SensorValues
 
 # pylint: disable=hass-logger-capital
 # ruff: noqa: BLE001
@@ -44,6 +45,9 @@ class ErfahrungsSpeicher:
             raum_soll: Soll-Raumtemperatur
             power_aktuell: Aktuelle Leistung (positiv=Netzbezug, negativ=Einspeisung)
         """
+
+        _LOGGER.info("speichere_erfahrung()")
+
         erfahrung = {
             "timestamp": datetime.now(),
             "features": features.copy(),
@@ -71,6 +75,9 @@ class ErfahrungsSpeicher:
         Returns:
             Liste von lernbaren Erfahrungen
         """
+
+        _LOGGER.info("hole_lernbare_erfahrungen()")
+
         now = datetime.now()
         lernbar = []
 
@@ -232,6 +239,8 @@ class FlowController:
         Typische Heizkurve: Vorlauf = A - B * Außentemperatur.
         """
 
+        _LOGGER.info("_heizkurve_fallback()")
+
         # Basis-Heizkurve (anpassbar)
         if aussen_temp <= -10:
             vorlauf = 38.0
@@ -253,6 +262,9 @@ class FlowController:
 
     def _berechne_trends(self) -> dict[str, float]:
         """Berechnet Temperatur-Trends aus Historie."""
+
+        _LOGGER.info("_berechne_trends()")
+
         if len(self.aussen_temp_history) < 2:
             return {
                 "aussen_trend": 0.0,
@@ -285,10 +297,7 @@ class FlowController:
 
     def _erstelle_features(
         self,
-        aussen_temp: float,
-        raum_ist: float,
-        raum_soll: float,
-        vorlauf_ist: float,
+        sensor_values: SensorValues,
         power_aktuell: float | None = None,
     ) -> dict[str, float]:
         """Erstellt Feature-Dictionary für das Model.
@@ -301,10 +310,12 @@ class FlowController:
             power_aktuell: Aktuelle Leistung (positiv=Netzbezug, negativ=Einspeisung)
         """
 
+        _LOGGER.info("_erstelle_features()")
+
         now = datetime.now()
 
         # Temperatur-Historie aktualisieren (kurzfristig)
-        self.aussen_temp_history.append(aussen_temp)
+        self.aussen_temp_history.append(sensor_values.aussen_temp)
         self.timestamps.append(now)
 
         if len(self.aussen_temp_history) > self.trend_history_size:
@@ -317,9 +328,9 @@ class FlowController:
             not self.aussen_temp_longterm
             or (now - self.aussen_temp_longterm[-1][0]).total_seconds() > 1800
         ):
-            self.aussen_temp_longterm.append((now, aussen_temp))
-            self.vorlauf_longterm.append((now, vorlauf_ist))
-            self.raum_temp_longterm.append((now, raum_ist))
+            self.aussen_temp_longterm.append((now, sensor_values.aussen_temp))
+            self.vorlauf_longterm.append((now, sensor_values.vorlauf_ist))
+            self.raum_temp_longterm.append((now, sensor_values.raum_ist))
 
             # Begrenze auf longterm_history_size
             if len(self.aussen_temp_longterm) > self.longterm_history_size:
@@ -331,7 +342,7 @@ class FlowController:
         trends = self._berechne_trends()
 
         # Raum-Abweichung
-        raum_abweichung = raum_soll - raum_ist
+        raum_abweichung = sensor_values.raum_soll - sensor_values.raum_ist
 
         # Tageszeit als zyklisches Feature
         stunde = now.hour + now.minute / 60.0
@@ -350,10 +361,10 @@ class FlowController:
         power_features = self._berechne_power_features(now, stunde, power_aktuell)
 
         features = {
-            "aussen_temp": aussen_temp,
-            "raum_ist": raum_ist,
-            "raum_soll": raum_soll,
-            "vorlauf_ist": vorlauf_ist,
+            "aussen_temp": sensor_values.aussen_temp,
+            "raum_ist": sensor_values.raum_ist,
+            "raum_soll": sensor_values.raum_soll,
+            "vorlauf_ist": sensor_values.vorlauf_ist,
             "raum_abweichung": raum_abweichung,
             "aussen_trend": trends["aussen_trend"],
             "aussen_trend_kurz": trends["aussen_trend_kurz"],
@@ -363,8 +374,8 @@ class FlowController:
             "wochentag_sin": wochentag_sin,
             "wochentag_cos": wochentag_cos,
             # Interaktions-Features
-            "temp_diff": aussen_temp - raum_ist,
-            "vorlauf_raum_diff": vorlauf_ist - raum_ist,
+            "temp_diff": sensor_values.aussen_temp - sensor_values.raum_ist,
+            "vorlauf_raum_diff": sensor_values.vorlauf_ist - sensor_values.raum_ist,
         }
 
         # Langzeit-Features hinzufügen
@@ -383,6 +394,9 @@ class FlowController:
         Returns:
             Dictionary mit Langzeit-Features
         """
+
+        _LOGGER.info("_berechne_longterm_features()")
+
         features = {
             "temp_24h_ago": 0.0,
             "temp_24h_avg": 0.0,
@@ -457,6 +471,9 @@ class FlowController:
         Returns:
             Dictionary mit Power-Features
         """
+
+        _LOGGER.info("_berechne_power_features()")
+
         features = {
             "power_avg_same_hour": 0.0,  # Durchschnitt zur gleichen Tageszeit
             "power_avg_1h": 0.0,  # Durchschnitt letzte 1h
@@ -537,6 +554,9 @@ class FlowController:
         Args:
             power_value: Aktueller Power-Wert oder None um zu deaktivieren
         """
+
+        _LOGGER.info("update_power_sensor()")
+
         if power_value is None:
             self.power_enabled = False
             _LOGGER.info("Power-Sensor deaktiviert")
@@ -562,6 +582,9 @@ class FlowController:
                 - reward: -1.0 bis +1.0 (wie gut war die Entscheidung)
                 - korrigierter_vorlauf: Verbesserter Sollwert falls reward < 0
         """
+
+        _LOGGER.info("_bewerte_erfahrung()")
+
         raum_soll = erfahrung["raum_soll"]
         vorlauf_gesetzt = erfahrung["vorlauf_gesetzt"]
 
@@ -657,6 +680,9 @@ class FlowController:
         Returns:
             Statistiken über das Lernen (gelernt_positiv, gelernt_negativ)
         """
+
+        _LOGGER.info("_lerne_aus_erfahrungen()")
+
         if not self.reward_learning_enabled:
             return {"gelernt_positiv": 0, "gelernt_negativ": 0}
 
@@ -732,10 +758,7 @@ class FlowController:
 
     def berechne_vorlauf_soll(
         self,
-        aussen_temp: float,
-        raum_ist: float,
-        raum_soll: float,
-        vorlauf_ist: float,
+        sensor_values: SensorValues,
         power_aktuell: float | None = None,
     ) -> tuple[float, dict[str, float]]:
         """Berechnet optimalen Vorlauf-Sollwert.
@@ -750,6 +773,9 @@ class FlowController:
         Returns:
             tuple: (vorlauf_soll, features_dict)
         """
+
+        _LOGGER.info("berechne_vorlauf_soll()")
+
         # Backwards compatibility: Stelle sicher, dass alle Attribute existieren
         self._ensure_attributes()
 
@@ -757,7 +783,7 @@ class FlowController:
         model_was_reset = False
 
         features = self._erstelle_features(
-            aussen_temp, raum_ist, raum_soll, vorlauf_ist, power_aktuell
+            sensor_values, power_aktuell
         )
 
         # Während Kaltstart: Heizkurve verwenden
@@ -766,7 +792,7 @@ class FlowController:
             and self.predictions_count < self.min_predictions_for_model
         ):
             vorlauf_soll = self._heizkurve_fallback(
-                aussen_temp, features["raum_abweichung"]
+                sensor_values.aussen_temp, features["raum_abweichung"]
             )
             _LOGGER.debug(
                 "Verwende Heizkurve (Kaltstart %d/%d): %.1f°C",
@@ -806,7 +832,7 @@ class FlowController:
                         model_was_reset = True
 
                     vorlauf_soll = self._heizkurve_fallback(
-                        aussen_temp, features["raum_abweichung"]
+                        sensor_values.aussen_temp, features["raum_abweichung"]
                     )
                 elif self.use_fallback:
                     _LOGGER.info("Wechsel von Heizkurve zu ML-Model")
@@ -815,7 +841,7 @@ class FlowController:
             except Exception as e:
                 _LOGGER.error("Fehler bei Model-Prediction: %s", e)
                 vorlauf_soll = self._heizkurve_fallback(
-                    aussen_temp, features["raum_abweichung"]
+                    sensor_values.aussen_temp, features["raum_abweichung"]
                 )
 
         # Begrenzung auf konfigurierten Bereich
@@ -830,24 +856,24 @@ class FlowController:
             self.erfahrungs_speicher.speichere_erfahrung(
                 features=features,
                 vorlauf_gesetzt=vorlauf_soll,
-                raum_ist_vorher=raum_ist,
-                raum_soll=raum_soll,
+                raum_ist_vorher=sensor_values.raum_ist,
+                raum_soll=sensor_values.raum_soll,
                 power_aktuell=power_aktuell,
             )
 
         # NEU: Lerne aus alten Erfahrungen (2-6h alt)
         if self.reward_learning_enabled and self.predictions_count % 2 == 0:
             # Nur jedes 2. Mal ausführen um Performance zu schonen
-            lern_stats = self._lerne_aus_erfahrungen(raum_ist_jetzt=raum_ist)
+            lern_stats = self._lerne_aus_erfahrungen(raum_ist_jetzt=sensor_values.raum_ist)
             if lern_stats["gelernt_positiv"] + lern_stats["gelernt_negativ"] > 0:
                 _LOGGER.debug("Reward-Learning Stats: %s", lern_stats)
 
         _LOGGER.info(
             "Vorlauf-Soll berechnet: %.1f°C (Außen: %.1f°C, Raum: %.1f/%.1f°C, Trend: %.2f)",
             vorlauf_soll,
-            aussen_temp,
-            raum_ist,
-            raum_soll,
+            sensor_values.aussen_temp,
+            sensor_values.raum_ist,
+            sensor_values.raum_soll,
             features["aussen_trend"],
         )
 
@@ -859,20 +885,20 @@ class FlowController:
 
         return vorlauf_soll, features
 
-    def get_model_stats(self) -> dict[str, float]:
+    def get_model_stats(self) -> ModelStats:
         """Gibt Model-Statistiken zurück."""
         erfahrungs_stats = self.erfahrungs_speicher.get_stats()
 
-        return {
-            "mae": self.metric.get() if self.predictions_count > 0 else 0.0,
-            "predictions_count": self.predictions_count,
-            "use_fallback": self.use_fallback,
-            "history_size": len(self.aussen_temp_history),
-            "erfahrungen_total": erfahrungs_stats["total"],
-            "erfahrungen_gelernt": erfahrungs_stats["gelernt"],
-            "erfahrungen_wartend": erfahrungs_stats["ungelernt"],
-            "reward_learning_enabled": self.reward_learning_enabled,
-        }
+        return ModelStats(
+            mae = self.metric.get() if self.predictions_count > 0 else 0.0,
+            predictions_count = self.predictions_count,
+            use_fallback = self.use_fallback,
+            history_size = len(self.aussen_temp_history),
+            erfahrungen_total = erfahrungs_stats["total"],
+            erfahrungen_gelernt = erfahrungs_stats["gelernt"],
+            erfahrungen_wartend = erfahrungs_stats["ungelernt"],
+            reward_learning_enabled = self.reward_learning_enabled,
+        )
 
     def reset_model(self) -> None:
         """Setzt das Model zurück (für Neustart)."""

@@ -20,7 +20,10 @@ from custom_components.heatpump_flow_control.const import (
     DEFAULT_BETRIEBSART_HEIZEN_WERT,
 )
 from custom_components.heatpump_flow_control.flow_controller import FlowController
-from custom_components.heatpump_flow_control.number import FlowControlNumber
+from custom_components.heatpump_flow_control.number import (
+    FlowControlNumber,
+    SensorValues,
+)
 import pytest
 
 
@@ -184,10 +187,10 @@ class TestAsyncGetSensorValues:
         result = await number._async_get_sensor_values()
 
         assert result is not None
-        assert result["aussen_temp"] == 5.0
-        assert result["raum_ist"] == 22.0
-        assert result["raum_soll"] == 21.0
-        assert result["vorlauf_ist"] == 35.0
+        assert result.aussen_temp == 5.0
+        assert result.raum_ist == 22.0
+        assert result.raum_soll == 21.0
+        assert result.vorlauf_ist == 35.0
 
     @pytest.mark.asyncio
     async def test_get_sensor_values_climate_entity(self, mock_hass, minimal_config):
@@ -216,7 +219,7 @@ class TestAsyncGetSensorValues:
         result = await number._async_get_sensor_values()
 
         assert result is not None
-        assert result["raum_soll"] == 21.5
+        assert result.raum_soll == 21.5
 
     @pytest.mark.asyncio
     async def test_get_sensor_values_unavailable(self, mock_hass, minimal_config):
@@ -474,16 +477,15 @@ class TestAsyncUpdateVorlaufSoll:
         number = FlowControlNumber(mock_hass, minimal_config, "test_entry")
         number.async_write_ha_state = Mock()
 
-        # Mock sensor values
-        sensor_values = {
-            "aussen_temp": 5.0,
-            "raum_ist": 22.0,
-            "raum_soll": 21.0,
-            "vorlauf_ist": 35.0,
-        }
+        mock_sensor_data = SensorValues(
+            aussen_temp=5.0,
+            raum_ist=22.0,
+            raum_soll=21.0,
+            vorlauf_ist=35.0
+        )
 
         with patch.object(
-            number, "_async_get_sensor_values", return_value=sensor_values
+            number, "_async_get_sensor_values", return_value=mock_sensor_data
         ):
             # Mock controller calculation
             mock_features = {
@@ -519,17 +521,16 @@ class TestAsyncUpdateVorlaufSoll:
         number = FlowControlNumber(mock_hass, minimal_config, "test_entry")
         number.async_write_ha_state = Mock()
 
-        # Mock sensor values
-        sensor_values = {
-            "aussen_temp": 5.0,
-            "raum_ist": 22.0,
-            "raum_soll": 21.0,
-            "vorlauf_ist": 35.0,
-        }
+        mock_sensor_data = SensorValues(
+            aussen_temp=5.0,
+            raum_ist=22.0,
+            raum_soll=21.0,
+            vorlauf_ist=35.0
+        )
 
         with (
             patch.object(
-                number, "_async_get_sensor_values", return_value=sensor_values
+                number, "_async_get_sensor_values", return_value=mock_sensor_data
             ),
             patch.object(number, "_async_set_vorlauf_soll") as mock_set,
         ):
@@ -566,13 +567,12 @@ class TestAsyncUpdateVorlaufSoll:
         number = FlowControlNumber(mock_hass, full_config, "test_entry")
         number.async_write_ha_state = Mock()
 
-        # Mock sensor values
-        sensor_values = {
-            "aussen_temp": 5.0,
-            "raum_ist": 22.0,
-            "raum_soll": 21.0,
-            "vorlauf_ist": 35.0,
-        }
+        mock_sensor_data = SensorValues(
+            aussen_temp=5.0,
+            raum_ist=22.0,
+            raum_soll=21.0,
+            vorlauf_ist=35.0
+        )
 
         # Mock power sensor
         power_state = MagicMock()
@@ -580,7 +580,7 @@ class TestAsyncUpdateVorlaufSoll:
 
         with (
             patch.object(
-                number, "_async_get_sensor_values", return_value=sensor_values
+                number, "_async_get_sensor_values", return_value=mock_sensor_data
             ),
             patch.object(
                 number._controller, "update_power_sensor"

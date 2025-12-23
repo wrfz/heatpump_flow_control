@@ -6,6 +6,7 @@ from unittest.mock import patch
 from custom_components.heatpump_flow_control.flow_controller import (
     ErfahrungsSpeicher,
     FlowController,
+    SensorValues,
 )
 
 
@@ -193,10 +194,10 @@ class TestFlowControllerInit:
         # Trainiere Model (10+ Predictions)
         for i in range(15):
             vorlauf_soll, features = controller.berechne_vorlauf_soll(
-                aussen_temp=5.0 - i * 0.5,
+                SensorValues(aussen_temp=5.0 - i * 0.5,
                 raum_ist=21.0,
                 raum_soll=21.0,
-                vorlauf_ist=35.0 + i,
+                vorlauf_ist=35.0 + i)
             )
             # Trainiere mit realistischem Wert
             controller.model.learn_one(features, 35.0 + i)
@@ -265,11 +266,13 @@ class TestFeatureCreation:
         controller = FlowController()
 
         features = controller._erstelle_features(
-            aussen_temp=5.0,
-            raum_ist=22.0,
-            raum_soll=21.0,
-            vorlauf_ist=35.0,
-            power_aktuell=None,
+            SensorValues(
+                aussen_temp=5.0,
+                raum_ist=22.0,
+                raum_soll=21.0,
+                vorlauf_ist=35.0
+            ),
+            power_aktuell=None
         )
 
         # Check basic features
@@ -304,10 +307,12 @@ class TestFeatureCreation:
         ]
 
         features = controller._erstelle_features(
-            aussen_temp=5.0,
-            raum_ist=22.0,
-            raum_soll=21.0,
-            vorlauf_ist=35.0,
+            SensorValues(
+                aussen_temp=5.0,
+                raum_ist=22.0,
+                raum_soll=21.0,
+                vorlauf_ist=35.0
+            ),
             power_aktuell=None,
         )
 
@@ -361,10 +366,12 @@ class TestPrediction:
         controller.min_predictions_for_model = 10
 
         vorlauf_soll, features = controller.berechne_vorlauf_soll(
-            aussen_temp=5.0,
-            raum_ist=22.0,
-            raum_soll=21.0,
-            vorlauf_ist=35.0,
+            SensorValues(
+                aussen_temp=5.0,
+                raum_ist=22.0,
+                raum_soll=21.0,
+                vorlauf_ist=35.0
+            )
         )
 
         # Should use fallback
@@ -378,10 +385,12 @@ class TestPrediction:
 
         # At high outdoor temp, standard Heizkurve would give low value
         vorlauf_soll, _ = controller.berechne_vorlauf_soll(
-            aussen_temp=15.0,  # Warm outside
-            raum_ist=20.0,
-            raum_soll=21.0,
-            vorlauf_ist=32.0,
+            SensorValues(
+                aussen_temp=15.0,  # Warm outside
+                raum_ist=20.0,
+                raum_soll=21.0,
+                vorlauf_ist=32.0,
+             )
         )
 
         # BUG: Should respect configured min_vorlauf
@@ -398,10 +407,12 @@ class TestPrediction:
         # Mock extreme prediction
         with patch.object(controller.model, "predict_one", return_value=100.0):
             vorlauf_soll, _ = controller.berechne_vorlauf_soll(
-                aussen_temp=5.0,
-                raum_ist=22.0,
-                raum_soll=21.0,
-                vorlauf_ist=35.0,
+                SensorValues(
+                    aussen_temp=5.0,
+                    raum_ist=22.0,
+                    raum_soll=21.0,
+                    vorlauf_ist=35.0
+                )
             )
 
             # Should use fallback (unrealistic value triggers fallback)
@@ -416,10 +427,12 @@ class TestPrediction:
         # Mock extreme prediction
         with patch.object(controller.model, "predict_one", return_value=5000000.0):
             vorlauf_soll, _ = controller.berechne_vorlauf_soll(
-                aussen_temp=5.0,
-                raum_ist=22.0,
-                raum_soll=21.0,
-                vorlauf_ist=35.0,
+                SensorValues(
+                    aussen_temp=5.0,
+                    raum_ist=22.0,
+                    raum_soll=21.0,
+                    vorlauf_ist=35.0
+                )
             )
 
             # Should use fallback and reset model
@@ -442,10 +455,12 @@ class TestLearning:
 
         # Make prediction - this stores an experience
         vorlauf, features = controller.berechne_vorlauf_soll(
-            aussen_temp=5.0,
-            raum_ist=22.0,
-            raum_soll=21.0,
-            vorlauf_ist=35.0,
+            SensorValues(
+                aussen_temp=5.0,
+                raum_ist=22.0,
+                raum_soll=21.0,
+                vorlauf_ist=35.0
+            )
         )
 
         # Should store experience in ErfahrungsSpeicher
@@ -460,10 +475,12 @@ class TestLearning:
         # Make multiple predictions
         for i in range(5):
             controller.berechne_vorlauf_soll(
-                aussen_temp=5.0 + i,
-                raum_ist=22.0,
-                raum_soll=21.0,
-                vorlauf_ist=35.0,
+                SensorValues(
+                    aussen_temp=5.0 + i,
+                    raum_ist=22.0,
+                    raum_soll=21.0,
+                    vorlauf_ist=35.0,
+                )
             )
 
         # History should be populated (only updates every 30 minutes, so may be 1)
@@ -571,10 +588,12 @@ class TestPowerSensor:
 
         # Should not crash with power value
         vorlauf_soll, features = controller.berechne_vorlauf_soll(
-            aussen_temp=5.0,
-            raum_ist=22.0,
-            raum_soll=21.0,
-            vorlauf_ist=35.0,
+            SensorValues(
+                aussen_temp=5.0,
+                raum_ist=22.0,
+                raum_soll=21.0,
+                vorlauf_ist=35.0,
+            ),
             power_aktuell=1500.0,
         )
 
@@ -613,10 +632,12 @@ class TestRealisticLearningScenario:
 
             # Berechne Vorlauf-Soll
             vorlauf_soll, features = controller.berechne_vorlauf_soll(
-                aussen_temp=aussen_temp,
-                raum_ist=raum_ist,
-                raum_soll=raum_soll,
-                vorlauf_ist=vorlauf_ist,
+                SensorValues(
+                    aussen_temp=aussen_temp,
+                    raum_ist=raum_ist,
+                    raum_soll=raum_soll,
+                    vorlauf_ist=vorlauf_ist,
+                )
             )
 
             vorlauf_predictions.append(
@@ -659,19 +680,6 @@ class TestRealisticLearningScenario:
 class TestModelStats:
     """Test model statistics."""
 
-    def test_get_model_stats(self):
-        """Test getting model statistics."""
-        controller = FlowController()
-
-        stats = controller.get_model_stats()
-
-        assert "mae" in stats
-        assert "predictions_count" in stats
-        assert "use_fallback" in stats
-        assert "history_size" in stats
-        assert "reward_learning_enabled" in stats
-        assert "erfahrungen_total" in stats
-
     def test_get_model_stats_with_experiences(self):
         """Test statistics with stored experiences."""
         controller = FlowController()
@@ -693,15 +701,15 @@ class TestModelStats:
 
         stats = controller.get_model_stats()
 
-        assert stats["erfahrungen_total"] == 5
-        assert stats["erfahrungen_gelernt"] == 1
-        assert stats["erfahrungen_wartend"] == 4
+        assert stats.erfahrungen_total == 5
+        assert stats.erfahrungen_gelernt == 1
+        assert stats.erfahrungen_wartend == 4
 
 
 class FlowTestHelper:
     """Helper class for fluent-style flow controller testing."""
 
-    def __init__(self, flow_controller: FlowController):
+    def __init__(self, flow_controller: FlowController) -> None:
         """Initialize test helper.
 
         Args:
@@ -781,10 +789,12 @@ class FlowTestHelper:
             mock_dt.side_effect = lambda *args, **kw: datetime(*args, **kw)
 
             vorlauf_soll, features = self.flow_controller.berechne_vorlauf_soll(
-                aussen_temp=self._t_aussen,
-                raum_ist=self._raum_ist,
-                raum_soll=self._raum_soll,
-                vorlauf_ist=self._vorlauf_ist,
+                SensorValues(
+                    aussen_temp=self._t_aussen,
+                    raum_ist=self._raum_ist,
+                    raum_soll=self._raum_soll,
+                    vorlauf_ist=self._vorlauf_ist,
+                )
             )
 
             # Add current room temperature to longterm history for reward learning
@@ -888,4 +898,21 @@ class TestFlowCalculation:
             #.vorlauf_ist(42.2).t_aussen(-11).expect_vorlauf_soll(43.0)
             #.vorlauf_ist(43.5).t_aussen(-12).expect_vorlauf_soll(44.0)
             #.vorlauf_ist(44.2).t_aussen(-12).expect_vorlauf_soll(44.5)
+        )
+
+    def test_flow_calculation2(self):
+        """Test flow controller learns to adjust based on room temperature feedback."""
+        flow_controller = FlowController(min_vorlauf=25.0, max_vorlauf=55.0)
+        flow_controller.min_predictions_for_model = 5  # Schnell aus Fallback raus
+        flow_controller.reward_learning_enabled = False  # Klassisches Lernen
+
+        (
+            controller(flow_controller).tolerance(0.1).wait(60)
+            .t_aussen(3.4).raum_ist(22.43).raum_soll(22.5).vorlauf_ist(31.7)
+            .expect_vorlauf_soll(40)
+            #.vorlauf_ist(30.3).raum_ist(20.3).expect_vorlauf_soll(30.8)
+            #.vorlauf_ist(30.6).raum_ist(20.5).expect_vorlauf_soll(28.7)
+            #.vorlauf_ist(30.0).raum_ist(20.8).expect_vorlauf_soll(28.7)
+            #.vorlauf_ist(29.0).raum_ist(21.0).expect_vorlauf_soll(28.7)
+            #.vorlauf_ist(28.5).raum_ist(21.0).expect_vorlauf_soll(28.7)
         )
