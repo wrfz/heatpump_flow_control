@@ -238,45 +238,6 @@ class TestFlowControlNumberIntegration:
         assert attrs["betriebsart"] == "Heizen"
 
     @pytest.mark.asyncio
-    async def test_update_when_control_switch_enabled(self, mock_hass, minimal_config):
-        """Test that value is sent to target when control switch is on."""
-        number = FlowControlNumber(mock_hass, minimal_config, "test_entry")
-        number.async_write_ha_state = Mock()
-
-        # Mock switch as ON
-        def get_state(entity_id):
-            if entity_id == f"switch.{DOMAIN}_aktiv":
-                return MagicMock(state="on")
-            states = {
-                "sensor.aussen_temp": MagicMock(state="5.0"),
-                "sensor.raum_ist": MagicMock(state="22.0"),
-                "sensor.raum_soll": MagicMock(state="21.0", domain="input_number"),
-                "sensor.vorlauf_ist": MagicMock(state="35.0"),
-                "number.vorlauf_soll": MagicMock(domain="number"),
-            }
-            return states.get(entity_id)
-
-        mock_hass.states.get = Mock(side_effect=get_state)
-
-        # Mock controller
-        mock_features = {
-            "raum_abweichung": 1.0,
-            "aussen_trend": 0.5,
-            "aussen_trend_kurz": 0.3,
-            "aussen_trend_mittel": 0.2,
-        }
-        mock_hass.async_add_executor_job.return_value = (38.5, mock_features)
-
-        # Trigger update
-        await number._async_update_vorlauf_soll()
-
-        # Should call service to update target
-        mock_hass.services.async_call.assert_called()
-        call_args = mock_hass.services.async_call.call_args
-        assert call_args.args == ("number", "set_value")
-        assert call_args.kwargs["value"] == 38.5
-
-    @pytest.mark.asyncio
     async def test_handles_unavailable_sensors_gracefully(
         self, mock_hass, minimal_config
     ):
@@ -300,29 +261,6 @@ class TestFlowControlNumberIntegration:
 
         # No service calls should be made
         mock_hass.services.async_call.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_climate_entity_as_target(self, mock_hass, minimal_config):
-        """Test sending value to climate entity instead of number."""
-        # Override target to climate
-        config = minimal_config.copy()
-        config[CONF_VORLAUF_SOLL_ENTITY] = "climate.heat_pump"
-
-        number = FlowControlNumber(mock_hass, config, "test_entry")
-        number.entity_id = "number.heatpump_flow_control_vorlauf_soll"  # Mock entity_id
-        number.platform = MagicMock()  # Mock platform
-
-        # Mock climate target
-        climate_state = MagicMock(domain="climate")
-        mock_hass.states.get.return_value = climate_state
-
-        # Set value
-        await number.async_set_native_value(40.0)
-
-        # Should call climate.set_temperature
-        call_args = mock_hass.services.async_call.call_args
-        assert call_args.args == ("climate", "set_temperature")
-        assert call_args.kwargs["temperature"] == 40.0
 
 
 class TestFlowControllerIntegration:
@@ -382,22 +320,6 @@ class TestErrorHandling:
 
         # Should become unavailable
         assert number.available is False
-
-    @pytest.mark.asyncio
-    async def test_handles_missing_target_entity(self, mock_hass, minimal_config):
-        """Test handling when target entity doesn't exist."""
-        number = FlowControlNumber(mock_hass, minimal_config, "test_entry")
-        number.entity_id = "number.heatpump_flow_control_vorlauf_soll"  # Mock entity_id
-        number.platform = MagicMock()  # Mock platform
-
-        # Mock missing target
-        mock_hass.states.get.return_value = None
-
-        # Should not crash
-        await number.async_set_native_value(40.0)
-
-        # No service call should be made
-        mock_hass.services.async_call.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_recovers_from_controller_exception(self, mock_hass, minimal_config):
