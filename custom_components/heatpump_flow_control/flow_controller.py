@@ -144,7 +144,7 @@ class FlowController:
         """
 
         # Speichere alten use_fallback Status (für Restart-Persistenz)
-        old_use_fallback = getattr(self, 'use_fallback', None)
+        old_use_fallback = getattr(self, "use_fallback", None)
 
         self.min_vorlauf = min_vorlauf
         self.max_vorlauf = max_vorlauf
@@ -858,53 +858,6 @@ class FlowController:
         )  # noqa: HASS_LOGGER_CAPITAL
 
         return vorlauf_soll, features
-
-    def lerne(
-        self,
-        aussen_temp: float,
-        raum_ist: float,
-        raum_soll: float,
-        vorlauf_ist: float,
-        tatsaechlicher_vorlauf: float,
-    ) -> None:
-        """Lernt aus tatsächlichem Vorlauf-Wert.
-
-        DEPRECATED: Diese Methode wird durch Reward-basiertes Lernen ersetzt.
-        Sie funktioniert noch, aber das neue System (_lerne_aus_erfahrungen)
-        lernt automatisch aus den Ergebnissen und ist robuster gegen
-        falsche Kausalitäten.
-
-        Args:
-            aussen_temp: Außentemperatur
-            raum_ist: Aktuelle Raumtemperatur
-            raum_soll: Soll-Raumtemperatur
-            vorlauf_ist: Aktueller Vorlauf
-            tatsaechlicher_vorlauf: Der Vorlauf, der tatsächlich eingestellt wurde
-        """
-
-        features = self._erstelle_features(
-            aussen_temp, raum_ist, raum_soll, vorlauf_ist
-        )
-
-        try:
-            # Prediction für Metrik
-            prediction = self.model.predict_one(features)
-
-            # Model aktualisieren (Online-Learning)
-            self.model.learn_one(features, tatsaechlicher_vorlauf)
-
-            # Metrik aktualisieren
-            self.metric.update(tatsaechlicher_vorlauf, prediction)
-
-            _LOGGER.debug(
-                "Model gelernt: Vorhersage=%.1f°C, Tatsächlich=%.1f°C, MAE=%.2f",
-                prediction,
-                tatsaechlicher_vorlauf,
-                self.metric.get(),
-            )
-
-        except Exception as e:
-            _LOGGER.error("Fehler beim Learning: %s", e)
 
     def get_model_stats(self) -> dict[str, float]:
         """Gibt Model-Statistiken zurück."""

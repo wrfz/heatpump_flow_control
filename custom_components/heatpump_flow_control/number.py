@@ -188,7 +188,7 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
         update_interval = timedelta(minutes=self._update_interval_minutes)
         self._update_interval_listener = async_track_time_interval(
             self.hass,
-            self._async_periodic_update,
+            self._async_update_vorlauf_soll,
             update_interval,
         )
 
@@ -275,51 +275,12 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
         if not self._available:
             self._create_task(self._check_and_update_if_ready())
 
-        # Nur lernen, nicht neu berechnen (das passiert stündlich)
-        self._create_task(self._async_learn_from_current_state())
-
     async def _check_and_update_if_ready(self):
         """Check if all sensors are ready and trigger update."""
         sensor_values = await self._async_get_sensor_values()
         if sensor_values is not None:
             _LOGGER.info("All sensors now available, triggering update")
             await self._async_update_vorlauf_soll()
-
-    async def _async_learn_from_current_state(self) -> None:
-        """Learn from current sensor states."""
-        try:
-            # Prüfe Betriebsart, falls konfiguriert
-            if self._betriebsart_sensor:
-                if not await self._is_heating_mode():
-                    _LOGGER.info(
-                        "Betriebsart ist nicht '%s', überspringe Learning",
-                        self._betriebsart_heizen_wert,
-                    )
-                    return
-
-            sensor_values = await self._async_get_sensor_values()
-            if sensor_values is None:
-                return
-
-            aussen_temp = sensor_values["aussen_temp"]
-            raum_ist = sensor_values["raum_ist"]
-            raum_soll = sensor_values["raum_soll"]
-            vorlauf_ist = sensor_values["vorlauf_ist"]
-
-            # Lerne nur, wenn wir einen Vorlauf-Soll gesetzt haben
-            if self._last_vorlauf_soll is not None:
-                await self.hass.async_add_executor_job(
-                    self._controller.lerne,
-                    aussen_temp,
-                    raum_ist,
-                    raum_soll,
-                    vorlauf_ist,
-                    self._last_vorlauf_soll,
-                )
-                _LOGGER.debug("Learning completed in heating mode")
-
-        except Exception as e:
-            _LOGGER.error("Error during learning: %s", e)
 
     async def _is_heating_mode(self) -> bool:
         """Check if heat pump is in heating mode.
@@ -357,10 +318,6 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
             )
 
         return is_heating
-
-    async def _async_periodic_update(self, now=None) -> None:
-        """Periodic update callback."""
-        await self._async_update_vorlauf_soll()
 
     async def _async_get_sensor_values(self) -> dict[str, float] | None:
         """Get current values from all sensors."""

@@ -63,7 +63,9 @@ class TestErfahrungsSpeicher:
         now = datetime.now()
 
         # Too recent (1 hour)
-        with patch("custom_components.heatpump_flow_control.flow_controller.datetime") as mock_dt:
+        with patch(
+            "custom_components.heatpump_flow_control.flow_controller.datetime"
+        ) as mock_dt:
             mock_dt.now.return_value = now - timedelta(hours=1)
             speicher.speichere_erfahrung(
                 features=features,
@@ -73,7 +75,9 @@ class TestErfahrungsSpeicher:
             )
 
         # Perfect age (3 hours)
-        with patch("custom_components.heatpump_flow_control.flow_controller.datetime") as mock_dt:
+        with patch(
+            "custom_components.heatpump_flow_control.flow_controller.datetime"
+        ) as mock_dt:
             mock_dt.now.return_value = now - timedelta(hours=3)
             speicher.speichere_erfahrung(
                 features=features,
@@ -83,7 +87,9 @@ class TestErfahrungsSpeicher:
             )
 
         # Too old (7 hours)
-        with patch("custom_components.heatpump_flow_control.flow_controller.datetime") as mock_dt:
+        with patch(
+            "custom_components.heatpump_flow_control.flow_controller.datetime"
+        ) as mock_dt:
             mock_dt.now.return_value = now - timedelta(hours=7)
             speicher.speichere_erfahrung(
                 features=features,
@@ -213,7 +219,9 @@ class TestFlowControllerInit:
         )
 
         # BUG-FIX: use_fallback sollte NICHT auf True zurückgehen
-        assert controller.use_fallback is False, "Trainiertes Model sollte nicht in Fallback zurückfallen"
+        assert controller.use_fallback is False, (
+            "Trainiertes Model sollte nicht in Fallback zurückfallen"
+        )
 
     def test_fallback_reset_on_corruption(self):
         """Test that fallback is reactivated when model is corrupted."""
@@ -231,8 +239,12 @@ class TestFlowControllerInit:
         )
 
         # Nach Reset wegen Korruption: use_fallback muss True sein
-        assert controller.use_fallback is True, "Fallback muss nach Model-Reset aktiv sein"
-        assert controller.predictions_count == 0, "Predictions zähler muss zurückgesetzt sein"
+        assert controller.use_fallback is True, (
+            "Fallback muss nach Model-Reset aktiv sein"
+        )
+        assert controller.predictions_count == 0, (
+            "Predictions zähler muss zurückgesetzt sein"
+        )
         delattr(controller, "power_enabled")
         delattr(controller, "power_history")
         delattr(controller, "reward_learning_enabled")
@@ -329,17 +341,14 @@ class TestPrediction:
         # Cold outside, room too cold
         vorlauf = controller._heizkurve_fallback(
             aussen_temp=-5.0,
-            raum_abweichung=2.0  # 2 degrees too cold
+            raum_abweichung=2.0,  # 2 degrees too cold
         )
 
         # Should be high
         assert vorlauf > 35.0
 
         # Warm outside, room ok
-        vorlauf = controller._heizkurve_fallback(
-            aussen_temp=15.0,
-            raum_abweichung=0.0
-        )
+        vorlauf = controller._heizkurve_fallback(aussen_temp=15.0, raum_abweichung=0.0)
 
         # Should be low
         assert vorlauf < 30.0
@@ -376,7 +385,9 @@ class TestPrediction:
         )
 
         # BUG: Should respect configured min_vorlauf
-        assert vorlauf_soll >= 30.0, f"Fallback returned {vorlauf_soll}°C but min is 30°C"
+        assert vorlauf_soll >= 30.0, (
+            f"Fallback returned {vorlauf_soll}°C but min is 30°C"
+        )
         assert vorlauf_soll <= 55.0
 
     def test_berechne_vorlauf_soll_within_limits(self):
@@ -414,7 +425,9 @@ class TestPrediction:
             # Should use fallback and reset model
             assert controller.use_fallback is True
             # Counter must be 0 after reset (ungültige Vorhersage zählt nicht)
-            assert controller.predictions_count == 0, "Counter must be reset after model reset"
+            assert controller.predictions_count == 0, (
+                "Counter must be reset after model reset"
+            )
             # Fallback value should be within reasonable range
             assert 25.0 <= vorlauf_soll <= 55.0
 
@@ -422,42 +435,38 @@ class TestPrediction:
 class TestLearning:
     """Test learning functionality."""
 
-    def test_lerne_basic(self):
-        """Test basic learning."""
+    def test_experience_storage(self):
+        """Test that experiences are stored during predictions."""
         controller = FlowController()
         controller.use_fallback = False
 
-        initial_count = controller.predictions_count
-
-        # Perform learning
-        controller.lerne(
+        # Make prediction - this stores an experience
+        vorlauf, features = controller.berechne_vorlauf_soll(
             aussen_temp=5.0,
             raum_ist=22.0,
             raum_soll=21.0,
             vorlauf_ist=35.0,
-            tatsaechlicher_vorlauf=36.0,
         )
 
-        # Should store history
-        assert len(controller.aussen_temp_history) > 0
-        # Note: lerne() is deprecated and doesn't create experiences anymore
-        # It only does direct model learning (online learning)
+        # Should store experience in ErfahrungsSpeicher
+        stats = controller.erfahrungs_speicher.get_stats()
+        assert stats["total"] == 1
+        assert stats["ungelernt"] == 1
 
-    def test_lerne_updates_history(self):
-        """Test that learning updates long-term history."""
+    def test_prediction_updates_history(self):
+        """Test that predictions update temperature history."""
         controller = FlowController()
 
-        # Learn multiple times
+        # Make multiple predictions
         for i in range(5):
-            controller.lerne(
+            controller.berechne_vorlauf_soll(
                 aussen_temp=5.0 + i,
                 raum_ist=22.0,
                 raum_soll=21.0,
                 vorlauf_ist=35.0,
-                tatsaechlicher_vorlauf=36.0,
             )
 
-        # Should have history (only updates every 10 minutes, so may be 1)
+        # History should be populated (only updates every 30 minutes, so may be 1)
         assert len(controller.aussen_temp_longterm) >= 1
         assert len(controller.vorlauf_longterm) >= 1
         assert len(controller.raum_temp_longterm) >= 1
@@ -610,12 +619,14 @@ class TestRealisticLearningScenario:
                 vorlauf_ist=vorlauf_ist,
             )
 
-            vorlauf_predictions.append({
-                "cycle": i,
-                "aussen_temp": aussen_temp,
-                "vorlauf_soll": vorlauf_soll,
-                "vorlauf_ist": vorlauf_ist,
-            })
+            vorlauf_predictions.append(
+                {
+                    "cycle": i,
+                    "aussen_temp": aussen_temp,
+                    "vorlauf_soll": vorlauf_soll,
+                    "vorlauf_ist": vorlauf_ist,
+                }
+            )
 
             # WICHTIG: Trainiere Model direkt mit dem tatsächlichen Vorlauf
             # In der Realität würde das Model aus vergangenen Messungen lernen
@@ -623,8 +634,12 @@ class TestRealisticLearningScenario:
             controller.model.learn_one(features, vorlauf_ist)
 
         # Analyse: Vorlauf sollte am Ende höher sein als am Anfang
-        vorlauf_anfang_avg = sum(p["vorlauf_soll"] for p in vorlauf_predictions[:10]) / 10
-        vorlauf_ende_avg = sum(p["vorlauf_soll"] for p in vorlauf_predictions[-10:]) / 10
+        vorlauf_anfang_avg = (
+            sum(p["vorlauf_soll"] for p in vorlauf_predictions[:10]) / 10
+        )
+        vorlauf_ende_avg = (
+            sum(p["vorlauf_soll"] for p in vorlauf_predictions[-10:]) / 10
+        )
 
         # Bei -5°C (Ende) sollte Vorlauf deutlich höher sein als bei 10°C (Anfang)
         assert vorlauf_ende_avg > vorlauf_anfang_avg, (
@@ -681,3 +696,143 @@ class TestModelStats:
         assert stats["erfahrungen_total"] == 5
         assert stats["erfahrungen_gelernt"] == 1
         assert stats["erfahrungen_wartend"] == 4
+
+
+class FlowTestHelper:
+    """Helper class for fluent-style flow controller testing."""
+
+    def __init__(self, flow_controller: FlowController):
+        """Initialize test helper.
+
+        Args:
+            flow_controller: The FlowController instance to test
+        """
+        self.flow_controller = flow_controller
+        self._t_aussen = 10.0
+        self._raum_ist = 20.0
+        self._raum_soll = 21.0
+        self._vorlauf_ist = 30.0
+        self._current_time = 0  # Simulated minutes
+        self._simulated_datetime = datetime.now()  # Start time
+        self._datetime_patcher = None
+
+    def _get_mocked_now(self):
+        """Return the current simulated datetime."""
+        return self._simulated_datetime
+
+    def t_aussen(self, temp: float) -> "FlowTestHelper":
+        """Set outside temperature."""
+        self._t_aussen = temp
+        return self
+
+    def raum_ist(self, temp: float) -> "FlowTestHelper":
+        """Set actual room temperature."""
+        self._raum_ist = temp
+        return self
+
+    def raum_soll(self, temp: float) -> "FlowTestHelper":
+        """Set target room temperature."""
+        self._raum_soll = temp
+        return self
+
+    def vorlauf_ist(self, temp: float) -> "FlowTestHelper":
+        """Set actual flow temperature."""
+        self._vorlauf_ist = temp
+        return self
+
+    def expect_vorlauf_soll(self, expected: float, tolerance: float = 0.5) -> "FlowTestHelper":
+        """Execute prediction and verify expected flow temperature.
+
+        Args:
+            expected: Expected flow temperature
+            tolerance: Allowed deviation in °C
+        """
+        # Mock datetime.now() to return simulated time
+        with patch('custom_components.heatpump_flow_control.flow_controller.datetime') as mock_dt:
+            mock_dt.now.return_value = self._simulated_datetime
+            # Also make datetime() constructor work normally
+            mock_dt.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
+            vorlauf_soll, _ = self.flow_controller.berechne_vorlauf_soll(
+                aussen_temp=self._t_aussen,
+                raum_ist=self._raum_ist,
+                raum_soll=self._raum_soll,
+                vorlauf_ist=self._vorlauf_ist,
+            )
+
+        # Update vorlauf_ist for next cycle (simulates actual system response)
+        self._vorlauf_ist = vorlauf_soll
+
+        assert abs(vorlauf_soll - expected) <= tolerance, (
+            f"Expected vorlauf_soll ~{expected}°C (±{tolerance}°C), "
+            f"got {vorlauf_soll:.1f}°C at time={self._current_time}min, "
+            f"aussen={self._t_aussen}°C, raum={self._raum_ist}°C"
+        )
+        return self
+
+    def wait(self, minutes: int) -> "FlowTestHelper":
+        """Simulate time passing (advances internal time counter).
+
+        Args:
+            minutes: Number of minutes to wait
+        """
+        self._current_time += minutes
+        self._simulated_datetime += timedelta(minutes=minutes)
+        return self
+
+
+def controller(flow_controller: FlowController) -> FlowTestHelper:
+    """Factory function to create FlowTestHelper.
+
+    Args:
+        flow_controller: The FlowController to wrap
+
+    Returns:
+        FlowTestHelper instance for fluent testing
+    """
+    return FlowTestHelper(flow_controller)
+
+
+class TestFlowCalculation:
+    """Test flow calculation with fluent API."""
+
+    def test_flow_calculation(self):
+        """Test flow controller learns to adjust based on room temperature feedback."""
+        flow_controller = FlowController(min_vorlauf=25.0, max_vorlauf=55.0)
+        flow_controller.min_predictions_for_model = 5  # Schnell aus Fallback raus
+        flow_controller.reward_learning_enabled = False  # Klassisches Lernen
+
+        (
+            controller(flow_controller)
+            .t_aussen(10).raum_ist(20).raum_soll(21).vorlauf_ist(30).expect_vorlauf_soll(30.0, tolerance=2.0)
+            .wait(60).raum_ist(20.3).expect_vorlauf_soll(30.8, tolerance=0.1)
+            .wait(60).raum_ist(20.5).expect_vorlauf_soll(28.7, tolerance=0.1)
+            .wait(60).raum_ist(20.8).expect_vorlauf_soll(28.7, tolerance=0.1)
+            .wait(60).raum_ist(21.0).expect_vorlauf_soll(28.7, tolerance=0.1)
+            .wait(60).raum_ist(21.0).expect_vorlauf_soll(28.7, tolerance=0.1)
+            .wait(60).raum_ist(21.0).expect_vorlauf_soll(28.7, tolerance=0.1)
+            .wait(60).raum_soll(22.5).expect_vorlauf_soll(33.2, tolerance=0.1)
+            .wait(60).raum_ist(21.1) # Setze Raum-ist höher
+            .expect_vorlauf_soll(32.9, tolerance=0.1)
+            .wait(60).raum_ist(21.2).expect_vorlauf_soll(32.6, tolerance=0.1)
+            .wait(60).raum_ist(21.4).expect_vorlauf_soll(32.0, tolerance=0.1)
+            .wait(60).raum_ist(21.6).expect_vorlauf_soll(31.4, tolerance=0.1)
+            .wait(60).raum_ist(22.7).expect_vorlauf_soll(28.7, tolerance=0.1)
+            .wait(60).raum_ist(22.6).expect_vorlauf_soll(28.7, tolerance=0.1)
+            .wait(60).raum_ist(22.5).expect_vorlauf_soll(28.7, tolerance=0.1)
+            .wait(60).raum_ist(22.5).expect_vorlauf_soll(28.7, tolerance=0.1)
+            .wait(60).raum_ist(22.5).expect_vorlauf_soll(28.7, tolerance=0.1)
+            # Senke Außentemperatur
+            .wait(60).t_aussen(9).expect_vorlauf_soll(29.2, tolerance=0.1)
+            .wait(60).t_aussen(8).expect_vorlauf_soll(29.6, tolerance=0.1)
+            .wait(60).t_aussen(6).expect_vorlauf_soll(30.6, tolerance=0.1)
+            .wait(60).t_aussen(3).expect_vorlauf_soll(32.0, tolerance=0.1)
+            .wait(60).t_aussen(0).expect_vorlauf_soll(33.4, tolerance=0.1)
+            .wait(60).t_aussen(-3).expect_vorlauf_soll(34.8, tolerance=0.1)
+            .wait(60).t_aussen(-6).expect_vorlauf_soll(36.1, tolerance=0.1)
+            .wait(60).t_aussen(-9).expect_vorlauf_soll(37.5, tolerance=0.1)
+            .wait(60).t_aussen(-11).expect_vorlauf_soll(38.0, tolerance=0.1)
+            .wait(60).t_aussen(-12).expect_vorlauf_soll(38.0, tolerance=0.1)
+            .wait(60).t_aussen(-12).expect_vorlauf_soll(38.0, tolerance=0.1)
+        )
+

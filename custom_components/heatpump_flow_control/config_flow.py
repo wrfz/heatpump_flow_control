@@ -19,6 +19,17 @@ def get_config_schema(defaults=None):
     if defaults is None:
         defaults = {}
 
+    # Power sensor dynamisch hinzufügen - nur mit default wenn Wert vorhanden
+    power_sensor_value = defaults.get("power_sensor")
+    if power_sensor_value and power_sensor_value != "":
+        # Wert vorhanden: mit default
+        power_sensor_field = vol.Optional(
+            "power_sensor", default=power_sensor_value
+        )
+    else:
+        # Kein Wert: ohne default (bleibt leer)
+        power_sensor_field = vol.Optional("power_sensor")
+
     return vol.Schema(
         {
             vol.Required(
@@ -53,9 +64,12 @@ def get_config_schema(defaults=None):
             ): selector.TextSelector(
                 selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
             ),
-            vol.Optional(
-                "power_sensor", default=defaults.get("power_sensor")
-            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
+            power_sensor_field: selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain="sensor",
+                    multiple=False,
+                )
+            ),
             vol.Optional(
                 "min_vorlauf", default=defaults.get("min_vorlauf", 25.0)
             ): selector.NumberSelector(
@@ -118,6 +132,10 @@ class FlowControlConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             try:
+                # Entferne leere/None power_sensor Werte (optional)
+                if "power_sensor" in user_input and not user_input["power_sensor"]:
+                    user_input["power_sensor"] = None
+
                 return self.async_create_entry(
                     title="Wärmepumpen ML Regelung",
                     data=user_input,
@@ -149,6 +167,10 @@ class FlowControlOptionsFlow(config_entries.OptionsFlow):
     async def async_step_init(self, user_input=None):
         """Manage the options."""
         if user_input is not None:
+            # Entferne leere/None power_sensor Werte (optional)
+            if "power_sensor" in user_input and not user_input["power_sensor"]:
+                user_input["power_sensor"] = None
+
             self.hass.config_entries.async_update_entry(
                 self._config_entry, data={**self._config_entry.data, **user_input}
             )
