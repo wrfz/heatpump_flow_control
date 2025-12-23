@@ -273,8 +273,8 @@ class TestFlowControlNumberIntegration:
         # Should call service to update target
         mock_hass.services.async_call.assert_called()
         call_args = mock_hass.services.async_call.call_args
-        assert call_args[0] == ("number", "set_value")
-        assert call_args[1]["value"] == 38.5
+        assert call_args.args == ("number", "set_value")
+        assert call_args.kwargs["value"] == 38.5
 
     @pytest.mark.asyncio
     async def test_handles_unavailable_sensors_gracefully(
@@ -309,6 +309,8 @@ class TestFlowControlNumberIntegration:
         config[CONF_VORLAUF_SOLL_ENTITY] = "climate.heat_pump"
 
         number = FlowControlNumber(mock_hass, config, "test_entry")
+        number.entity_id = "number.heatpump_flow_control_vorlauf_soll"  # Mock entity_id
+        number.platform = MagicMock()  # Mock platform
 
         # Mock climate target
         climate_state = MagicMock(domain="climate")
@@ -319,8 +321,8 @@ class TestFlowControlNumberIntegration:
 
         # Should call climate.set_temperature
         call_args = mock_hass.services.async_call.call_args
-        assert call_args[0] == ("climate", "set_temperature")
-        assert call_args[1]["temperature"] == 40.0
+        assert call_args.args == ("climate", "set_temperature")
+        assert call_args.kwargs["temperature"] == 40.0
 
 
 class TestFlowControllerIntegration:
@@ -385,6 +387,8 @@ class TestErrorHandling:
     async def test_handles_missing_target_entity(self, mock_hass, minimal_config):
         """Test handling when target entity doesn't exist."""
         number = FlowControlNumber(mock_hass, minimal_config, "test_entry")
+        number.entity_id = "number.heatpump_flow_control_vorlauf_soll"  # Mock entity_id
+        number.platform = MagicMock()  # Mock platform
 
         # Mock missing target
         mock_hass.states.get.return_value = None

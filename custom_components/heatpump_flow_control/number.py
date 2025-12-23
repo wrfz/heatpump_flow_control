@@ -385,7 +385,7 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
                 "vorlauf_ist": vorlauf_ist,
             }
 
-    async def _async_update_vorlauf_soll(self) -> None:
+    async def _async_update_vorlauf_soll(self, now=None) -> None:
         """Update the Vorlauf-Soll value."""
         try:
             _LOGGER.info("_async_update_vorlauf_soll()")
