@@ -12,7 +12,7 @@ from .const import (
     DEFAULT_MIN_VORLAUF,
     DEFAULT_TREND_HISTORY_SIZE,
 )
-from .types import ModelStats, SensorValues
+from .types import Features, LongtermFeatures, ModelStats, PowerFeatures, SensorValues
 
 # pylint: disable=hass-logger-capital
 # ruff: noqa: BLE001
@@ -81,13 +81,13 @@ class ErfahrungsSpeicher:
         now = datetime.now()
         lernbar = []
 
-        for erf in self.erfahrungen:
-            if erf["gelernt"]:
+        for erfahrung in self.erfahrungen:
+            if erfahrung["gelernt"]:
                 continue
 
-            stunden_alt = (now - erf["timestamp"]).total_seconds() / 3600
+            stunden_alt = (now - erfahrung["timestamp"]).total_seconds() / 3600
             if min_stunden <= stunden_alt <= max_stunden:
-                lernbar.append(erf)
+                lernbar.append(erfahrung)
 
         return lernbar
 
@@ -299,7 +299,7 @@ class FlowController:
         self,
         sensor_values: SensorValues,
         power_aktuell: float | None = None,
-    ) -> dict[str, float]:
+    ) -> Features:
         """Erstellt Feature-Dictionary für das Model.
 
         Args:
@@ -360,35 +360,35 @@ class FlowController:
         # NEU: Power-Features berechnen (wenn aktiviert)
         power_features = self._berechne_power_features(now, stunde, power_aktuell)
 
-        features = {
-            "aussen_temp": sensor_values.aussen_temp,
-            "raum_ist": sensor_values.raum_ist,
-            "raum_soll": sensor_values.raum_soll,
-            "vorlauf_ist": sensor_values.vorlauf_ist,
-            "raum_abweichung": raum_abweichung,
-            "aussen_trend": trends["aussen_trend"],
-            "aussen_trend_kurz": trends["aussen_trend_kurz"],
-            "aussen_trend_mittel": trends["aussen_trend_mittel"],
-            "stunde_sin": stunde_sin,
-            "stunde_cos": stunde_cos,
-            "wochentag_sin": wochentag_sin,
-            "wochentag_cos": wochentag_cos,
+        features = Features(
+            aussen_temp = sensor_values.aussen_temp,
+            raum_ist = sensor_values.raum_ist,
+            raum_soll = sensor_values.raum_soll,
+            vorlauf_ist = sensor_values.vorlauf_ist,
+            raum_abweichung = raum_abweichung,
+            aussen_trend = trends["aussen_trend"],
+            aussen_trend_kurz = trends["aussen_trend_kurz"],
+            aussen_trend_mittel = trends["aussen_trend_mittel"],
+            stunde_sin = stunde_sin,
+            stunde_cos = stunde_cos,
+            wochentag_sin = wochentag_sin,
+            wochentag_cos = wochentag_cos,
             # Interaktions-Features
-            "temp_diff": sensor_values.aussen_temp - sensor_values.raum_ist,
-            "vorlauf_raum_diff": sensor_values.vorlauf_ist - sensor_values.raum_ist,
-        }
+            temp_diff = sensor_values.aussen_temp - sensor_values.raum_ist,
+            vorlauf_raum_diff = sensor_values.vorlauf_ist - sensor_values.raum_ist,
+        )
 
         # Langzeit-Features hinzufügen
-        features.update(longterm_features)
+        features.set_long_term_features(longterm_features)
 
         # Power-Features hinzufügen
-        features.update(power_features)
+        features.set_power_features(power_features)
 
         return features
 
     def _berechne_longterm_features(
         self, now: datetime, current_hour: float
-    ) -> dict[str, float]:
+    ) -> LongtermFeatures:
         """Berechnet Langzeit-Features aus der Historie.
 
         Returns:
@@ -397,13 +397,13 @@ class FlowController:
 
         _LOGGER.info("_berechne_longterm_features()")
 
-        features = {
-            "temp_24h_ago": 0.0,
-            "temp_24h_avg": 0.0,
-            "temp_7d_avg": 0.0,
-            "temp_same_hour_avg": 0.0,
-            "vorlauf_same_hour_avg": 0.0,
-        }
+        features = LongtermFeatures(
+            temp_24h_ago = 0.0,
+            temp_24h_avg = 0.0,
+            temp_7d_avg = 0.0,
+            temp_same_hour_avg = 0.0,
+            vorlauf_same_hour_avg = 0.0,
+        )
 
         if len(self.aussen_temp_longterm) < 2:
             return features
@@ -415,18 +415,18 @@ class FlowController:
             if (now - ts).total_seconds() < 86400
         ]
         if temps_24h:
-            features["temp_24h_avg"] = sum(temps_24h) / len(temps_24h)
+            features.temp_24h_avg = sum(temps_24h) / len(temps_24h)
 
         # Durchschnittstemperatur letzte 7 Tage
         if self.aussen_temp_longterm:
             all_temps = [temp for _, temp in self.aussen_temp_longterm]
-            features["temp_7d_avg"] = sum(all_temps) / len(all_temps)
+            features.temp_7d_avg = sum(all_temps) / len(all_temps)
 
         # Temperatur vor 24 Stunden (± 2 Stunden Toleranz)
         for ts, temp in reversed(self.aussen_temp_longterm):
             hours_ago = (now - ts).total_seconds() / 3600
             if 22 <= hours_ago <= 26:  # 24h ± 2h
-                features["temp_24h_ago"] = temp
+                features.temp_24h_ago = temp
                 break
 
         # Durchschnitt zur gleichen Tageszeit (± 1 Stunde)
@@ -446,9 +446,9 @@ class FlowController:
                     same_hour_vorlauf.append(self.vorlauf_longterm[i][1])
 
         if same_hour_temps:
-            features["temp_same_hour_avg"] = sum(same_hour_temps) / len(same_hour_temps)
+            features.temp_same_hour_avg = sum(same_hour_temps) / len(same_hour_temps)
         if same_hour_vorlauf:
-            features["vorlauf_same_hour_avg"] = sum(same_hour_vorlauf) / len(
+            features.vorlauf_same_hour_avg = sum(same_hour_vorlauf) / len(
                 same_hour_vorlauf
             )
 
@@ -456,7 +456,7 @@ class FlowController:
 
     def _berechne_power_features(
         self, now: datetime, current_hour: float, power_aktuell: float | None
-    ) -> dict[str, float]:
+    ) -> PowerFeatures:
         """Berechnet Power-basierte Features (PV-Überschuss/Strompreis).
 
         WICHTIG: Verwendet NICHT den aktuellen Power-Wert als Feature, um
@@ -474,12 +474,12 @@ class FlowController:
 
         _LOGGER.info("_berechne_power_features()")
 
-        features = {
-            "power_avg_same_hour": 0.0,  # Durchschnitt zur gleichen Tageszeit
-            "power_avg_1h": 0.0,  # Durchschnitt letzte 1h
-            "power_avg_3h": 0.0,  # Durchschnitt letzte 3h
-            "power_favorable_hours": 0.0,  # Anteil günstiger Stunden heute
-        }
+        features = PowerFeatures(
+            power_avg_same_hour = 0.0,  # Durchschnitt zur gleichen Tageszeit
+            power_avg_1h = 0.0,  # Durchschnitt letzte 1h
+            power_avg_3h = 0.0,  # Durchschnitt letzte 3h
+            power_favorable_hours = 0.0,  # Anteil günstiger Stunden heute
+        )
 
         if not self.power_enabled or not self.power_history:
             return features
@@ -510,7 +510,7 @@ class FlowController:
                 same_hour_power.append(power)
 
         if same_hour_power:
-            features["power_avg_same_hour"] = sum(same_hour_power) / len(
+            features.power_avg_same_hour = sum(same_hour_power) / len(
                 same_hour_power
             )
 
@@ -521,7 +521,7 @@ class FlowController:
             if (now - ts).total_seconds() < 3600
         ]
         if power_1h:
-            features["power_avg_1h"] = sum(power_1h) / len(power_1h)
+            features.power_avg_1h = sum(power_1h) / len(power_1h)
 
         # Durchschnitt letzte 3h
         power_3h = [
@@ -530,20 +530,20 @@ class FlowController:
             if (now - ts).total_seconds() < 10800
         ]
         if power_3h:
-            features["power_avg_3h"] = sum(power_3h) / len(power_3h)
+            features.power_avg_3h = sum(power_3h) / len(power_3h)
 
         # Anteil günstiger Stunden (negative Werte = Einspeisung) heute
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         power_today = [power for ts, power in self.power_history if ts >= today_start]
         if power_today:
             favorable_count = sum(1 for p in power_today if p < 0)  # Einspeisung
-            features["power_favorable_hours"] = favorable_count / len(power_today)
+            features.power_favorable_hours = favorable_count / len(power_today)
 
         _LOGGER.debug(
             "Power-Features: same_hour_avg=%.1f, 1h_avg=%.1f, favorable=%.1f%%",
-            features["power_avg_same_hour"],
-            features["power_avg_1h"],
-            features["power_favorable_hours"] * 100,
+            features.power_avg_same_hour,
+            features.power_avg_1h,
+            features.power_favorable_hours * 100,
         )
 
         return features
@@ -760,7 +760,7 @@ class FlowController:
         self,
         sensor_values: SensorValues,
         power_aktuell: float | None = None,
-    ) -> tuple[float, dict[str, float]]:
+    ) -> tuple[float, Features]:
         """Berechnet optimalen Vorlauf-Sollwert.
 
         Args:
@@ -771,7 +771,7 @@ class FlowController:
             power_aktuell: Aktuelle Leistung (positiv=Netzbezug, negativ=Einspeisung)
 
         Returns:
-            tuple: (vorlauf_soll, features_dict)
+            tuple: (vorlauf_soll, features)
         """
 
         _LOGGER.info("berechne_vorlauf_soll()")
@@ -792,7 +792,7 @@ class FlowController:
             and self.predictions_count < self.min_predictions_for_model
         ):
             vorlauf_soll = self._heizkurve_fallback(
-                sensor_values.aussen_temp, features["raum_abweichung"]
+                sensor_values.aussen_temp, features.raum_abweichung
             )
             _LOGGER.debug(
                 "Verwende Heizkurve (Kaltstart %d/%d): %.1f°C",
@@ -803,7 +803,7 @@ class FlowController:
         else:
             # ML-Model verwenden
             try:
-                vorlauf_soll = self.model.predict_one(features)
+                vorlauf_soll = self.model.predict_one(features.to_dict())
 
                 # Sanity check: Falls Model unrealistische Werte liefert
                 if vorlauf_soll < 15 or vorlauf_soll > 70:
@@ -832,7 +832,7 @@ class FlowController:
                         model_was_reset = True
 
                     vorlauf_soll = self._heizkurve_fallback(
-                        sensor_values.aussen_temp, features["raum_abweichung"]
+                        sensor_values.aussen_temp, features.raum_abweichung
                     )
                 elif self.use_fallback:
                     _LOGGER.info("Wechsel von Heizkurve zu ML-Model")
@@ -841,7 +841,7 @@ class FlowController:
             except Exception as e:
                 _LOGGER.error("Fehler bei Model-Prediction: %s", e)
                 vorlauf_soll = self._heizkurve_fallback(
-                    sensor_values.aussen_temp, features["raum_abweichung"]
+                    sensor_values.aussen_temp, features.raum_abweichung
                 )
 
         # Begrenzung auf konfigurierten Bereich
@@ -854,7 +854,7 @@ class FlowController:
         # NEU: Speichere diese Entscheidung für späteres Reward-Learning
         if self.reward_learning_enabled:
             self.erfahrungs_speicher.speichere_erfahrung(
-                features=features,
+                features=features.to_dict(),
                 vorlauf_gesetzt=vorlauf_soll,
                 raum_ist_vorher=sensor_values.raum_ist,
                 raum_soll=sensor_values.raum_soll,
@@ -874,7 +874,7 @@ class FlowController:
             sensor_values.aussen_temp,
             sensor_values.raum_ist,
             sensor_values.raum_soll,
-            features["aussen_trend"],
+            features.aussen_trend,
         )
 
         _LOGGER.info(

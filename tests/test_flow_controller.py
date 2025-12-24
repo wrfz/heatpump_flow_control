@@ -200,7 +200,7 @@ class TestFlowControllerInit:
                 vorlauf_ist=35.0 + i)
             )
             # Trainiere mit realistischem Wert
-            controller.model.learn_one(features, 35.0 + i)
+            controller.model.learn_one(features.to_dict(), 35.0 + i)
 
         # Nach Training: Fallback sollte aus sein
         assert controller.predictions_count >= 10
@@ -276,23 +276,23 @@ class TestFeatureCreation:
         )
 
         # Check basic features
-        assert features["aussen_temp"] == 5.0
-        assert features["raum_ist"] == 22.0
-        assert features["raum_soll"] == 21.0
-        assert features["vorlauf_ist"] == 35.0
-        assert features["raum_abweichung"] == -1.0  # 21 - 22 (soll - ist)
-        assert features["temp_diff"] == -17.0  # 5 - 22
-        assert features["vorlauf_raum_diff"] == 13.0  # 35 - 22
+        assert features.aussen_temp == 5.0
+        assert features.raum_ist == 22.0
+        assert features.raum_soll == 21.0
+        assert features.vorlauf_ist == 35.0
+        assert features.raum_abweichung == -1.0  # 21 - 22 (soll - ist)
+        assert features.temp_diff == -17.0  # 5 - 22
+        assert features.vorlauf_raum_diff == 13.0  # 35 - 22
 
         # Check time features exist
-        assert "stunde_sin" in features
-        assert "stunde_cos" in features
-        assert "wochentag_sin" in features
-        assert "wochentag_cos" in features
+        assert features.stunde_sin is not None
+        assert features.stunde_cos is not None
+        assert features.wochentag_sin is not None
+        assert features.wochentag_cos is not None
 
         # Check power features are zero (not enabled)
-        assert features["power_avg_same_hour"] == 0.0
-        assert features["power_avg_1h"] == 0.0
+        assert features.power_avg_same_hour == 0.0
+        assert features.power_avg_1h == 0.0
 
     def test_erstelle_features_with_trends(self):
         """Test feature creation with temperature trends."""
@@ -318,8 +318,8 @@ class TestFeatureCreation:
 
         # Trends should be calculated (may be 0 with insufficient data)
         # Just check they exist
-        assert "aussen_trend" in features
-        assert "aussen_trend_kurz" in features
+        assert features.aussen_trend is not None
+        assert features.aussen_trend_kurz is not None
 
     def test_berechne_power_features_disabled(self):
         """Test power features when sensor is disabled."""
@@ -330,11 +330,10 @@ class TestFeatureCreation:
         features = controller._berechne_power_features(now, 12.0, None)
 
         # All power features should be 0
-        assert features["power_avg_same_hour"] == 0.0
-        assert features["power_avg_1h"] == 0.0
-        assert features["power_avg_3h"] == 0.0
-        assert features["power_favorable_hours"] == 0.0
-
+        assert features.power_avg_same_hour == 0.0
+        assert features.power_avg_1h == 0.0
+        assert features.power_avg_3h == 0.0
+        assert features.power_favorable_hours == 0.0
 
 class TestPrediction:
     """Test prediction logic."""
@@ -598,7 +597,7 @@ class TestPowerSensor:
         )
 
         assert vorlauf_soll is not None
-        assert "power_avg_1h" in features
+        assert features.power_avg_1h >= 0.0
 
 
 class TestRealisticLearningScenario:
@@ -652,7 +651,7 @@ class TestRealisticLearningScenario:
             # WICHTIG: Trainiere Model direkt mit dem tatsächlichen Vorlauf
             # In der Realität würde das Model aus vergangenen Messungen lernen
             # Hier simulieren wir: Der IST-Wert war der "richtige" Wert
-            controller.model.learn_one(features, vorlauf_ist)
+            controller.model.learn_one(features.to_dict(), vorlauf_ist)
 
         # Analyse: Vorlauf sollte am Ende höher sein als am Anfang
         vorlauf_anfang_avg = (
