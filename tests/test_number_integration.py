@@ -22,7 +22,10 @@ from custom_components.heatpump_flow_control.const import (
     CONF_VORLAUF_SOLL_ENTITY,
     DOMAIN,
 )
-from custom_components.heatpump_flow_control.flow_controller import FlowController
+from custom_components.heatpump_flow_control.flow_controller import (
+    Features,
+    FlowController,
+)
 from custom_components.heatpump_flow_control.number import FlowControlNumber
 import pytest
 
@@ -211,14 +214,14 @@ class TestFlowControlNumberIntegration:
         mock_hass.states.get = Mock(side_effect=get_state)
 
         # Mock controller calculation
-        mock_features = {
-            "raum_abweichung": 1.0,
-            "aussen_trend": 0.5,
-            "aussen_trend_kurz": 0.3,
-            "aussen_trend_mittel": 0.2,
-            "power_avg_1h": 1400.0,
-            "power_favorable_hours": 0.3,
-        }
+        mock_features = Features(
+            raum_abweichung = 1.0,
+            aussen_trend = 0.5,
+            aussen_trend_kurz = 0.3,
+            aussen_trend_mittel = 0.2,
+            power_avg_1h = 1400.0,
+            power_favorable_hours = 0.3,
+        )
         mock_hass.async_add_executor_job.return_value = (38.5, mock_features)
 
         # Trigger update through public interface
@@ -283,12 +286,12 @@ class TestFlowControllerIntegration:
         # Mock successful update
         mock_hass.async_add_executor_job.return_value = (
             38.5,
-            {
-                "raum_abweichung": 1.0,
-                "aussen_trend": 0.5,
-                "aussen_trend_kurz": 0.3,
-                "aussen_trend_mittel": 0.2,
-            },
+            Features(
+                raum_abweichung = 1.0,
+                aussen_trend = 0.5,
+                aussen_trend_kurz = 0.3,
+                aussen_trend_mittel = 0.2,
+            ),
         )
 
         with patch.object(

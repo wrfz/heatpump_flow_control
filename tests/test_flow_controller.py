@@ -4,7 +4,9 @@ from datetime import datetime, timedelta
 from unittest.mock import patch
 
 from custom_components.heatpump_flow_control.flow_controller import (
+    Erfahrung,
     ErfahrungsSpeicher,
+    Features,
     FlowController,
     SensorValues,
 )
@@ -24,7 +26,7 @@ class TestErfahrungsSpeicher:
         """Test storing an experience."""
         speicher = ErfahrungsSpeicher()
 
-        features = {"aussen_temp": 5.0, "raum_ist": 22.0}
+        features = Features(aussen_temp = 5.0, raum_ist = 22.0)
         speicher.speichere_erfahrung(
             features=features,
             vorlauf_gesetzt=35.0,
@@ -34,14 +36,14 @@ class TestErfahrungsSpeicher:
         )
 
         assert len(speicher.erfahrungen) == 1
-        assert speicher.erfahrungen[0]["vorlauf_gesetzt"] == 35.0
-        assert speicher.erfahrungen[0]["gelernt"] is False
-        assert "timestamp" in speicher.erfahrungen[0]
+        assert speicher.erfahrungen[0].vorlauf_gesetzt == 35.0
+        assert speicher.erfahrungen[0].gelernt is False
+        assert speicher.erfahrungen[0].timestamp is not None
 
     def test_max_size_limit(self):
         """Test that max_size is enforced."""
         speicher = ErfahrungsSpeicher(max_size=3)
-        features = {"test": 1.0}
+        features = Features()
 
         for i in range(5):
             speicher.speichere_erfahrung(
@@ -53,12 +55,12 @@ class TestErfahrungsSpeicher:
 
         # Should only keep last 3
         assert len(speicher.erfahrungen) == 3
-        assert speicher.erfahrungen[0]["vorlauf_gesetzt"] == 32.0  # 2nd experience
+        assert speicher.erfahrungen[0].vorlauf_gesetzt == 32.0  # 2nd experience
 
     def test_hole_lernbare_erfahrungen(self):
         """Test retrieving learnable experiences."""
         speicher = ErfahrungsSpeicher()
-        features = {"test": 1.0}
+        features = Features()
 
         # Add experiences at different times
         now = datetime.now()
@@ -100,20 +102,20 @@ class TestErfahrungsSpeicher:
             )
 
         # Manually set timestamps (patch doesn't work in list comprehension)
-        speicher.erfahrungen[0]["timestamp"] = now - timedelta(hours=1)
-        speicher.erfahrungen[1]["timestamp"] = now - timedelta(hours=3)
-        speicher.erfahrungen[2]["timestamp"] = now - timedelta(hours=7)
+        speicher.erfahrungen[0].timestamp = now - timedelta(hours=1)
+        speicher.erfahrungen[1].timestamp = now - timedelta(hours=3)
+        speicher.erfahrungen[2].timestamp = now - timedelta(hours=7)
 
         lernbar = speicher.hole_lernbare_erfahrungen(min_stunden=2.0, max_stunden=6.0)
 
         # Only the 3-hour old experience should be learnable
         assert len(lernbar) == 1
-        assert lernbar[0]["vorlauf_gesetzt"] == 35.0
+        assert lernbar[0].vorlauf_gesetzt == 35.0
 
     def test_markiere_gelernt(self):
         """Test marking experience as learned."""
         speicher = ErfahrungsSpeicher()
-        features = {"test": 1.0}
+        features = Features()
 
         speicher.speichere_erfahrung(
             features=features,
@@ -123,15 +125,15 @@ class TestErfahrungsSpeicher:
         )
 
         erfahrung = speicher.erfahrungen[0]
-        assert erfahrung["gelernt"] is False
+        assert erfahrung.gelernt is False
 
         speicher.markiere_gelernt(erfahrung)
-        assert erfahrung["gelernt"] is True
+        assert erfahrung.gelernt is True
 
     def test_get_stats(self):
         """Test statistics retrieval."""
         speicher = ErfahrungsSpeicher()
-        features = {"test": 1.0}
+        features = Features()
 
         # Add 3 experiences, mark 2 as learned
         for i in range(3):
@@ -492,13 +494,14 @@ class TestLearning:
         controller = FlowController()
 
         # Room was too cold (21°C), we increased flow, now it's better (21.5°C)
-        erfahrung = {
-            "features": {"raum_abweichung": -1.0},
-            "raum_ist_vorher": 21.0,
-            "raum_soll": 22.0,
-            "vorlauf_gesetzt": 38.0,
-            "power_aktuell": None,
-        }
+        erfahrung = Erfahrung(
+            timestamp=datetime.now(),
+            features=Features(raum_abweichung=-1.0),
+            raum_ist_vorher=21.0,
+            raum_soll=22.0,
+            vorlauf_gesetzt=38.0,
+            power_aktuell=None,
+        )
 
         reward, y_target = controller._bewerte_erfahrung(
             erfahrung=erfahrung,
@@ -514,13 +517,14 @@ class TestLearning:
         controller = FlowController()
 
         # Room was ok (22°C), now it's too hot (23°C)
-        erfahrung = {
-            "features": {"raum_abweichung": 0.0},
-            "raum_ist_vorher": 22.0,
-            "raum_soll": 22.0,
-            "vorlauf_gesetzt": 40.0,  # Too high
-            "power_aktuell": None,
-        }
+        erfahrung = Erfahrung(
+            timestamp=datetime.now(),
+            features=Features(raum_abweichung=0.0),
+            raum_ist_vorher=22.0,
+            raum_soll=22.0,
+            vorlauf_gesetzt=40.0,  # Too high
+            power_aktuell=None,
+        )
 
         reward, y_target = controller._bewerte_erfahrung(
             erfahrung=erfahrung,
@@ -540,7 +544,10 @@ class TestLearning:
         now = datetime.now()
         old_time = now - timedelta(hours=3)
 
-        features = {"raum_abweichung": 1.0, "aussen_temp": 5.0}
+        features = Features(
+            raum_abweichung = 1.0,
+            aussen_temp = 5.0
+        )
         controller.erfahrungs_speicher.speichere_erfahrung(
             features=features,
             vorlauf_gesetzt=35.0,
@@ -549,7 +556,7 @@ class TestLearning:
         )
 
         # Manually set old timestamp
-        controller.erfahrungs_speicher.erfahrungen[0]["timestamp"] = old_time
+        controller.erfahrungs_speicher.erfahrungen[0].timestamp = old_time
 
         # Add current data to longterm history
         controller.raum_temp_longterm = [(now, 21.5)]
@@ -684,7 +691,7 @@ class TestModelStats:
         controller = FlowController()
 
         # Add some experiences
-        features = {"test": 1.0}
+        features = Features()
         for i in range(5):
             controller.erfahrungs_speicher.speichere_erfahrung(
                 features=features,

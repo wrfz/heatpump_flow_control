@@ -19,7 +19,10 @@ from custom_components.heatpump_flow_control.const import (
     CONF_VORLAUF_SOLL_ENTITY,
     DEFAULT_BETRIEBSART_HEIZEN_WERT,
 )
-from custom_components.heatpump_flow_control.flow_controller import FlowController
+from custom_components.heatpump_flow_control.flow_controller import (
+    Features,
+    FlowController,
+)
 from custom_components.heatpump_flow_control.number import (
     FlowControlNumber,
     SensorValues,
@@ -488,14 +491,14 @@ class TestAsyncUpdateVorlaufSoll:
             number, "_async_get_sensor_values", return_value=mock_sensor_data
         ):
             # Mock controller calculation
-            mock_features = {
-                "raum_abweichung": 1.0,
-                "aussen_trend": 0.5,
-                "aussen_trend_kurz": 0.3,
-                "aussen_trend_mittel": 0.2,
-                "power_avg_1h": 0.0,
-                "power_favorable_hours": 0.0,
-            }
+            mock_features = Features(
+                raum_abweichung=1.0,
+                aussen_trend=0.5,
+                aussen_trend_kurz=0.3,
+                aussen_trend_mittel=0.2,
+                power_avg_1h=0.0,
+                power_favorable_hours=0.0,
+            )
             mock_hass.async_add_executor_job.side_effect = [
                 (38.5, mock_features),  # berechne_vorlauf_soll
                 None,  # save_model
@@ -535,14 +538,14 @@ class TestAsyncUpdateVorlaufSoll:
             patch.object(number, "_async_set_vorlauf_soll") as mock_set,
         ):
             # Mock controller calculation
-            mock_features = {
-                "raum_abweichung": 1.0,
-                "aussen_trend": 0.5,
-                "aussen_trend_kurz": 0.3,
-                "aussen_trend_mittel": 0.2,
-                "power_avg_1h": 0.0,
-                "power_favorable_hours": 0.0,
-            }
+            mock_features = Features(
+                raum_abweichung = 1.0,
+                aussen_trend = 0.5,
+                aussen_trend_kurz = 0.3,
+                aussen_trend_mittel = 0.2,
+                power_avg_1h = 0.0,
+                power_favorable_hours = 0.0,
+            )
             mock_hass.async_add_executor_job.side_effect = [
                 (38.5, mock_features),  # berechne_vorlauf_soll
                 None,  # save_model

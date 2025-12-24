@@ -12,7 +12,14 @@ from .const import (
     DEFAULT_MIN_VORLAUF,
     DEFAULT_TREND_HISTORY_SIZE,
 )
-from .types import Features, LongtermFeatures, ModelStats, PowerFeatures, SensorValues
+from .types import (
+    Erfahrung,
+    Features,
+    LongtermFeatures,
+    ModelStats,
+    PowerFeatures,
+    SensorValues,
+)
 
 # pylint: disable=hass-logger-capital
 # ruff: noqa: BLE001
@@ -25,12 +32,12 @@ class ErfahrungsSpeicher:
 
     def __init__(self, max_size: int = 200) -> None:
         """Initialize experience storage."""
-        self.erfahrungen = []
+        self.erfahrungen: list[Erfahrung] = []
         self.max_size = max_size
 
     def speichere_erfahrung(
         self,
-        features: dict[str, float],
+        features: Features,
         vorlauf_gesetzt: float,
         raum_ist_vorher: float,
         raum_soll: float,
@@ -48,15 +55,15 @@ class ErfahrungsSpeicher:
 
         _LOGGER.info("speichere_erfahrung()")
 
-        erfahrung = {
-            "timestamp": datetime.now(),
-            "features": features.copy(),
-            "vorlauf_gesetzt": vorlauf_gesetzt,
-            "raum_ist_vorher": raum_ist_vorher,
-            "raum_soll": raum_soll,
-            "power_aktuell": power_aktuell,
-            "gelernt": False,
-        }
+        erfahrung = Erfahrung(
+            timestamp = datetime.now(),
+            features = features.copy(),
+            vorlauf_gesetzt = vorlauf_gesetzt,
+            raum_ist_vorher = raum_ist_vorher,
+            raum_soll = raum_soll,
+            power_aktuell = power_aktuell,
+            gelernt = False,
+        )
         self.erfahrungen.append(erfahrung)
 
         # Begrenze Größe
@@ -65,7 +72,7 @@ class ErfahrungsSpeicher:
 
     def hole_lernbare_erfahrungen(
         self, min_stunden: float = 2.0, max_stunden: float = 6.0
-    ) -> list:
+    ) -> list[Erfahrung]:
         """Gibt Erfahrungen zurück, die alt genug sind zum Lernen.
 
         Args:
@@ -79,26 +86,26 @@ class ErfahrungsSpeicher:
         _LOGGER.info("hole_lernbare_erfahrungen()")
 
         now = datetime.now()
-        lernbar = []
+        lernbar: list[Erfahrung] = []
 
         for erfahrung in self.erfahrungen:
-            if erfahrung["gelernt"]:
+            if erfahrung.gelernt:
                 continue
 
-            stunden_alt = (now - erfahrung["timestamp"]).total_seconds() / 3600
+            stunden_alt = (now - erfahrung.timestamp).total_seconds() / 3600
             if min_stunden <= stunden_alt <= max_stunden:
                 lernbar.append(erfahrung)
 
         return lernbar
 
-    def markiere_gelernt(self, erfahrung: dict) -> None:
+    def markiere_gelernt(self, erfahrung: Erfahrung) -> None:
         """Markiert eine Erfahrung als gelernt."""
-        erfahrung["gelernt"] = True
+        erfahrung.gelernt = True
 
     def get_stats(self) -> dict[str, int]:
         """Gibt Statistiken über den Speicher zurück."""
         total = len(self.erfahrungen)
-        gelernt = sum(1 for e in self.erfahrungen if e["gelernt"])
+        gelernt = sum(1 for e in self.erfahrungen if e.gelernt)
         ungelernt = total - gelernt
 
         return {
@@ -566,7 +573,7 @@ class FlowController:
 
     def _bewerte_erfahrung(
         self,
-        erfahrung: dict,
+        erfahrung: Erfahrung,
         raum_ist_jetzt: float,
         aussen_trend: float = 0.0,
     ) -> tuple[float, float]:
@@ -585,8 +592,8 @@ class FlowController:
 
         _LOGGER.info("_bewerte_erfahrung()")
 
-        raum_soll = erfahrung["raum_soll"]
-        vorlauf_gesetzt = erfahrung["vorlauf_gesetzt"]
+        raum_soll = erfahrung.raum_soll
+        vorlauf_gesetzt = erfahrung.vorlauf_gesetzt
 
         # Wie groß ist die Abweichung jetzt (2-3h später)?
         abweichung = raum_ist_jetzt - raum_soll
@@ -624,10 +631,10 @@ class FlowController:
         # NEU: Power-basierte Reward-Anpassung
         if (
             self.power_enabled
-            and "power_aktuell" in erfahrung
-            and erfahrung["power_aktuell"] is not None
+            and hasattr(erfahrung, "power_aktuell")
+            and erfahrung.power_aktuell is not None
         ):
-            power_damals = erfahrung["power_aktuell"]
+            power_damals = erfahrung.power_aktuell
 
             # Bonus: Bei günstigen Strom (Einspeisung/PV-Überschuss) mehr geheizt
             if (
@@ -642,7 +649,7 @@ class FlowController:
             # Bonus: Bei teuerem Strom (Netzbezug) weniger geheizt und Raum trotzdem OK
             elif power_damals > 1000 and reward >= 0:  # Netzbezug > 1kW
                 # Prüfe ob Vorlauf niedriger war als üblich zur gleichen Tageszeit
-                vorlauf_avg_same_hour = erfahrung["features"].get(
+                vorlauf_avg_same_hour = erfahrung.features.get(
                     "vorlauf_same_hour_avg", 0
                 )
                 if (
@@ -702,7 +709,7 @@ class FlowController:
                 erfahrung, raum_ist_jetzt, aussen_trend
             )
 
-            features = erfahrung["features"]
+            features: Features = erfahrung.features
 
             try:
                 if reward >= 0:
@@ -710,8 +717,8 @@ class FlowController:
                     # Höheres sample_weight für sehr gute Erfahrungen
                     sample_weight = 1.0 + reward  # 1.0 bis 2.0
                     self.model.learn_one(
-                        features,
-                        erfahrung["vorlauf_gesetzt"],
+                        features.to_dict(),
+                        erfahrung.vorlauf_gesetzt,
                         sample_weight=sample_weight,
                     )
 
@@ -721,13 +728,13 @@ class FlowController:
                         "✓ Reward-Lernen (Reward=%.1f, Weight=%.1f): Vorlauf %.1f°C war gut",
                         reward,
                         sample_weight,
-                        erfahrung["vorlauf_gesetzt"],
+                        erfahrung.vorlauf_gesetzt,
                     )
                 else:
                     # Schlechte Erfahrung: Lerne mit korrigiertem Vorlauf
                     sample_weight = abs(reward) * 1.5  # 0.75 bis 1.5
                     self.model.learn_one(
-                        features, korrigierter_vorlauf, sample_weight=sample_weight
+                        features.to_dict(), korrigierter_vorlauf, sample_weight=sample_weight
                     )
 
                     stats["gelernt_negativ"] += 1
@@ -736,7 +743,7 @@ class FlowController:
                         "✗ Reward-Lernen (Reward=%.1f, Weight=%.1f): Vorlauf %.1f°C → besser %.1f°C",
                         reward,
                         sample_weight,
-                        erfahrung["vorlauf_gesetzt"],
+                        erfahrung.vorlauf_gesetzt,
                         korrigierter_vorlauf,
                     )
 
@@ -854,7 +861,7 @@ class FlowController:
         # NEU: Speichere diese Entscheidung für späteres Reward-Learning
         if self.reward_learning_enabled:
             self.erfahrungs_speicher.speichere_erfahrung(
-                features=features.to_dict(),
+                features=features,
                 vorlauf_gesetzt=vorlauf_soll,
                 raum_ist_vorher=sensor_values.raum_ist,
                 raum_soll=sensor_values.raum_soll,

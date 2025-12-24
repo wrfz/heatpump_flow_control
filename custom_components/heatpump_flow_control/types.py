@@ -1,7 +1,8 @@
 """Shared types."""
 
 from collections.abc import Iterator
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, fields, replace
+from datetime import datetime
 from typing import Any
 
 
@@ -46,6 +47,7 @@ class PowerFeatures:
     power_avg_1h: float = 0.0
     power_avg_3h: float = 0.0
     power_favorable_hours: float = 0.0
+
 @dataclass
 class Features(LongtermFeatures, PowerFeatures):
     """Model features."""
@@ -85,3 +87,23 @@ class Features(LongtermFeatures, PowerFeatures):
     def items(self) -> Iterator[tuple[str, float]]:
             """Gibt eine Iterierbare Liste von Schlüssel-Wert-Paaren zurück."""
             return iter(asdict(self).items())
+
+    def copy(self) -> "Features":
+        """Erstellt eine exakte Kopie der aktuellen Features-Instanz."""
+        return replace(self)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Simuliert das Verhalten eines Dictionaries."""
+        return getattr(self, key, default)
+
+@dataclass
+class Erfahrung:
+    """Erfahrung für das Modell."""
+
+    timestamp: datetime
+    features: Features
+    vorlauf_gesetzt: float
+    raum_ist_vorher: float
+    raum_soll: float
+    power_aktuell: float | None = None
+    gelernt: bool = False
