@@ -6,12 +6,6 @@ import math
 
 from river import compose, linear_model, metrics, optim, preprocessing
 
-from .const import (
-    DEFAULT_LEARNING_RATE,
-    DEFAULT_MAX_VORLAUF,
-    DEFAULT_MIN_VORLAUF,
-    DEFAULT_TREND_HISTORY_SIZE,
-)
 from .types import (
     Erfahrung,
     Features,
@@ -63,11 +57,10 @@ class ErfahrungsSpeicher:
         )
         self.erfahrungen.append(erfahrung)
 
-        # Begrenze Größe
         if len(self.erfahrungen) > self.max_size:
             self.erfahrungen.pop(0)
 
-    def hole_lernbare_erfahrungen(
+    def get_lernbare_erfahrungen(
         self, min_stunden: float = 2.0, max_stunden: float = 6.0
     ) -> list[Erfahrung]:
         """Gibt Erfahrungen zurück, die alt genug sind zum Lernen.
@@ -80,7 +73,7 @@ class ErfahrungsSpeicher:
             Liste von lernbaren Erfahrungen
         """
 
-        _LOGGER.info("hole_lernbare_erfahrungen()")
+        _LOGGER.info("get_lernbare_erfahrungen()")
 
         now = datetime.now()
         lernbar: list[Erfahrung] = []
@@ -117,12 +110,17 @@ class FlowController:
 
     def __init__(
         self,
-        min_vorlauf: float = DEFAULT_MIN_VORLAUF,
-        max_vorlauf: float = DEFAULT_MAX_VORLAUF,
-        learning_rate: float = DEFAULT_LEARNING_RATE,
-        trend_history_size: int = DEFAULT_TREND_HISTORY_SIZE,
+        min_vorlauf: float,
+        max_vorlauf: float,
+        learning_rate: float,
+        trend_history_size: int,
     ) -> None:
         """Initialize the flow controller."""
+
+        self.min_vorlauf = min_vorlauf
+        self.max_vorlauf = max_vorlauf
+        self.learning_rate = learning_rate
+        self.trend_history_size = trend_history_size
 
         self.predictions_count = 0
 
@@ -131,43 +129,26 @@ class FlowController:
         self.min_reward_hours = 2.0  # Mindeststunden bis Bewertung
         self.max_reward_hours = 6.0  # Maximalstunden bis Bewertung
 
-        self._setup(
-            min_vorlauf=min_vorlauf,
-            max_vorlauf=max_vorlauf,
-            learning_rate=learning_rate,
-            trend_history_size=trend_history_size,
-        )
+        self._setup()
 
     def _setup(
         self,
         *,
-        min_vorlauf: float = DEFAULT_MIN_VORLAUF,
-        max_vorlauf: float = DEFAULT_MAX_VORLAUF,
-        learning_rate: float = DEFAULT_LEARNING_RATE,
-        trend_history_size: int = DEFAULT_TREND_HISTORY_SIZE,
         force_fallback: bool = False,
     ) -> None:
         """Initialize the flow controller.
 
         Args:
-            min_vorlauf: Minimale Vorlauftemperatur
-            max_vorlauf: Maximale Vorlauftemperatur
-            learning_rate: Learning Rate für das Model
-            trend_history_size: Größe der Trend-Historie
             force_fallback: Wenn True, erzwinge Fallback-Modus (z.B. bei Model-Reset)
         """
 
         # Speichere alten use_fallback Status (für Restart-Persistenz)
         old_use_fallback = getattr(self, "use_fallback", None)
 
-        self.min_vorlauf = min_vorlauf
-        self.max_vorlauf = max_vorlauf
-        self.trend_history_size = trend_history_size
-
         # River Online-Learning Model
         self.model = compose.Pipeline(
             preprocessing.StandardScaler(),
-            linear_model.LinearRegression(optimizer=optim.SGD(learning_rate)),
+            linear_model.LinearRegression(optimizer=optim.SGD(self.learning_rate)),
         )
 
         # Historie für Trend-Berechnung (kurz)
@@ -205,10 +186,10 @@ class FlowController:
 
         _LOGGER.info(
             "_setup(): min=%s, max=%s, lr=%s, history=%s, longterm=%s, reward_learning=%s",
-            min_vorlauf,
-            max_vorlauf,
-            learning_rate,
-            trend_history_size,
+            self.min_vorlauf,
+            self.max_vorlauf,
+            self.learning_rate,
+            self.trend_history_size,
             self.longterm_history_size,
             self.reward_learning_enabled,
         )
@@ -528,7 +509,7 @@ class FlowController:
         if not self.reward_learning_enabled:
             return {"gelernt_positiv": 0, "gelernt_negativ": 0}
 
-        lernbare = self.erfahrungs_speicher.hole_lernbare_erfahrungen(
+        lernbare = self.erfahrungs_speicher.get_lernbare_erfahrungen(
             min_stunden=self.min_reward_hours, max_stunden=self.max_reward_hours
         )
 
@@ -639,7 +620,7 @@ class FlowController:
                 vorlauf_soll,
             )
         else:
-            # ML-Model verwenden
+            # Model verwenden
             try:
                 vorlauf_soll = self.model.predict_one(features.to_dict())
 
@@ -659,10 +640,6 @@ class FlowController:
                         )
                         # Model komplett neu initialisieren
                         self._setup(
-                            min_vorlauf=self.min_vorlauf,
-                            max_vorlauf=self.max_vorlauf,
-                            learning_rate=0.01,  # Default
-                            trend_history_size=self.trend_history_size,
                             force_fallback=True,  # Erzwinge Fallback nach Reset
                         )
                         self.predictions_count = 0
@@ -722,7 +699,7 @@ class FlowController:
 
         return vorlauf_soll, features
 
-    def get_model_stats(self) -> ModelStats:
+    def get_model_statistics(self) -> ModelStats:
         """Gibt Model-Statistiken zurück."""
         erfahrungs_stats = self.erfahrungs_speicher.get_stats()
 
@@ -742,9 +719,5 @@ class FlowController:
         _LOGGER.info("-> reset_model()")
 
         self._setup(
-            min_vorlauf=self.min_vorlauf,
-            max_vorlauf=self.max_vorlauf,
-            learning_rate=0.01,
-            trend_history_size=self.trend_history_size,
             force_fallback=True,  # Erzwinge Fallback nach manuellem Reset
         )

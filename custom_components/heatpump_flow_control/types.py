@@ -1,7 +1,7 @@
 """Shared types."""
 
 from collections.abc import Iterator
-from dataclasses import asdict, dataclass, fields, replace, field
+from dataclasses import asdict, dataclass, fields, replace
 from datetime import datetime
 from typing import Any
 
@@ -69,17 +69,16 @@ class Features(LongtermFeatures):
     def set_long_term_features(self, long_term_features: LongtermFeatures):
         """Set long_term_features attributes to self."""
         for field in fields(long_term_features):
-                    value = getattr(long_term_features, field.name)
-                    setattr(self, field.name, value)
+            value = getattr(long_term_features, field.name)
+            setattr(self, field.name, value)
 
     def to_dict(self) -> dict[str, float]:
-            """Gibt die Features als Dictionary zurück."""
-            return asdict(self)
-
+        """Gibt die Features als Dictionary zurück."""
+        return asdict(self)
 
     def items(self) -> Iterator[tuple[str, float]]:
-            """Gibt eine Iterierbare Liste von Schlüssel-Wert-Paaren zurück."""
-            return iter(asdict(self).items())
+        """Gibt eine Iterierbare Liste von Schlüssel-Wert-Paaren zurück."""
+        return iter(asdict(self).items())
 
     def copy(self) -> "Features":
         """Erstellt eine exakte Kopie der aktuellen Features-Instanz."""

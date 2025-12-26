@@ -56,7 +56,7 @@ class TestErfahrungsSpeicher:
         assert len(speicher.erfahrungen) == 3
         assert speicher.erfahrungen[0].vorlauf_gesetzt == 32.0  # 2nd experience
 
-    def test_hole_lernbare_erfahrungen(self):
+    def test_get_lernbare_erfahrungen(self):
         """Test retrieving learnable experiences."""
         speicher = ErfahrungsSpeicher()
         features = Features()
@@ -105,7 +105,7 @@ class TestErfahrungsSpeicher:
         speicher.erfahrungen[1].timestamp = now - timedelta(hours=3)
         speicher.erfahrungen[2].timestamp = now - timedelta(hours=7)
 
-        lernbar = speicher.hole_lernbare_erfahrungen(min_stunden=2.0, max_stunden=6.0)
+        lernbar = speicher.get_lernbare_erfahrungen(min_stunden=2.0, max_stunden=6.0)
 
         # Only the 3-hour old experience should be learnable
         assert len(lernbar) == 1
@@ -155,17 +155,6 @@ class TestErfahrungsSpeicher:
 class TestFlowControllerInit:
     """Test FlowController initialization."""
 
-    def test_default_initialization(self):
-        """Test controller initializes with defaults."""
-        controller = FlowController()
-
-        assert controller.min_vorlauf == 25.0  # DEFAULT_MIN_VORLAUF
-        assert controller.max_vorlauf == 55.0  # DEFAULT_MAX_VORLAUF
-        assert controller.use_fallback is True
-        assert controller.predictions_count == 0
-        assert hasattr(controller, "model")
-        assert hasattr(controller, "erfahrungs_speicher")
-
     def test_custom_initialization(self):
         """Test controller with custom parameters."""
         controller = FlowController(
@@ -186,7 +175,12 @@ class TestFlowControllerInit:
         in Fallback-Modus gehen.
         """
         # Simuliere ersten Start: Fallback aktiv
-        controller = FlowController()
+        controller = FlowController(
+            min_vorlauf=18.0,
+            max_vorlauf=39.0,
+            learning_rate=0.01,
+            trend_history_size=12
+        )
         assert controller.use_fallback is True
         assert controller.predictions_count == 0
 
@@ -212,10 +206,6 @@ class TestFlowControllerInit:
 
         # Simuliere Pickle-Reload: _setup() wird aufgerufen aber use_fallback existiert schon
         controller._setup(
-            min_vorlauf=controller.min_vorlauf,
-            max_vorlauf=controller.max_vorlauf,
-            learning_rate=0.01,
-            trend_history_size=controller.trend_history_size,
         )
 
         # BUG-FIX: use_fallback sollte NICHT auf True zurückgehen
@@ -225,16 +215,17 @@ class TestFlowControllerInit:
 
     def test_fallback_reset_on_corruption(self):
         """Test that fallback is reactivated when model is corrupted."""
-        controller = FlowController()
+        controller = FlowController(
+            min_vorlauf=18.0,
+            max_vorlauf=39.0,
+            learning_rate=0.01,
+            trend_history_size=12
+        )
         controller.use_fallback = False  # Model war bereits trainiert
         controller.predictions_count = 100
 
         # Simuliere Model-Korruption durch _setup Aufruf mit force_fallback
         controller._setup(
-            min_vorlauf=controller.min_vorlauf,
-            max_vorlauf=controller.max_vorlauf,
-            learning_rate=0.01,
-            trend_history_size=controller.trend_history_size,
             force_fallback=True,  # Erzwinge Fallback nach Reset
         )
 
@@ -258,7 +249,12 @@ class TestFeatureCreation:
 
     def test_erstelle_features_basic(self):
         """Test basic feature creation."""
-        controller = FlowController()
+        controller = FlowController(
+            min_vorlauf=18.0,
+            max_vorlauf=39.0,
+            learning_rate=0.01,
+            trend_history_size=12
+        )
 
         features = controller._erstelle_features(
             SensorValues(
@@ -286,7 +282,12 @@ class TestFeatureCreation:
 
     def test_erstelle_features_with_trends(self):
         """Test feature creation with temperature trends."""
-        controller = FlowController()
+        controller = FlowController(
+            min_vorlauf=18.0,
+            max_vorlauf=39.0,
+            learning_rate=0.01,
+            trend_history_size=12
+        )
 
         # Add some history
         controller.aussen_temp_history = [3.0, 4.0, 5.0]
@@ -315,7 +316,12 @@ class TestPrediction:
 
     def test_fallback_heizkurve(self):
         """Test fallback heating curve calculation."""
-        controller = FlowController()
+        controller = FlowController(
+            min_vorlauf=18.0,
+            max_vorlauf=39.0,
+            learning_rate=0.01,
+            trend_history_size=12
+        )
 
         # Cold outside, room too cold
         vorlauf = controller._heizkurve_fallback(
@@ -334,7 +340,12 @@ class TestPrediction:
 
     def test_berechne_vorlauf_soll_fallback_mode(self):
         """Test calculation in fallback mode."""
-        controller = FlowController()
+        controller = FlowController(
+            min_vorlauf=18.0,
+            max_vorlauf=39.0,
+            learning_rate=0.01,
+            trend_history_size=12
+        )
         controller.use_fallback = True
         controller.predictions_count = 5
         controller.min_predictions_for_model = 10
@@ -354,7 +365,12 @@ class TestPrediction:
 
     def test_fallback_respects_configured_min_vorlauf(self):
         """Test that fallback mode respects configured min_vorlauf boundary."""
-        controller = FlowController(min_vorlauf=30.0, max_vorlauf=55.0)
+        controller = FlowController(
+            min_vorlauf=30.0,
+            max_vorlauf=55.0,
+            learning_rate=0.01,
+            trend_history_size=12
+        )
         controller.use_fallback = True
 
         # At high outdoor temp, standard Heizkurve would give low value
@@ -375,7 +391,12 @@ class TestPrediction:
 
     def test_berechne_vorlauf_soll_within_limits(self):
         """Test that prediction is always within configured limits."""
-        controller = FlowController(min_vorlauf=28.0, max_vorlauf=40.0)
+        controller = FlowController(
+            min_vorlauf=28.0,
+            max_vorlauf=40.0,
+            learning_rate=0.01,
+            trend_history_size=12
+        )
         controller.use_fallback = False  # Force model usage
 
         # Mock extreme prediction
@@ -394,7 +415,12 @@ class TestPrediction:
 
     def test_unrealistic_prediction_triggers_fallback(self):
         """Test that unrealistic predictions trigger fallback."""
-        controller = FlowController()
+        controller = FlowController(
+            min_vorlauf=18.0,
+            max_vorlauf=39.0,
+            learning_rate=0.01,
+            trend_history_size=12
+        )
         controller.use_fallback = False
         controller.predictions_count = 20
 
@@ -424,7 +450,12 @@ class TestLearning:
 
     def test_experience_storage(self):
         """Test that experiences are stored during predictions."""
-        controller = FlowController()
+        controller = FlowController(
+            min_vorlauf=18.0,
+            max_vorlauf=39.0,
+            learning_rate=0.01,
+            trend_history_size=12
+        )
         controller.use_fallback = False
 
         # Make prediction - this stores an experience
@@ -444,7 +475,12 @@ class TestLearning:
 
     def test_prediction_updates_history(self):
         """Test that predictions update temperature history."""
-        controller = FlowController()
+        controller = FlowController(
+            min_vorlauf=18.0,
+            max_vorlauf=39.0,
+            learning_rate=0.01,
+            trend_history_size=12
+        )
 
         # Make multiple predictions
         for i in range(5):
@@ -464,7 +500,12 @@ class TestLearning:
 
     def test_bewerte_erfahrung_positive_reward(self):
         """Test experience evaluation with positive reward."""
-        controller = FlowController()
+        controller = FlowController(
+            min_vorlauf=18.0,
+            max_vorlauf=39.0,
+            learning_rate=0.01,
+            trend_history_size=12
+        )
 
         # Room was too cold (21°C), we increased flow, now it's better (21.5°C)
         erfahrung = Erfahrung(
@@ -486,7 +527,12 @@ class TestLearning:
 
     def test_bewerte_erfahrung_negative_reward(self):
         """Test experience evaluation with negative reward."""
-        controller = FlowController()
+        controller = FlowController(
+            min_vorlauf=18.0,
+            max_vorlauf=39.0,
+            learning_rate=0.01,
+            trend_history_size=12
+        )
 
         # Room was ok (22°C), now it's too hot (23°C)
         erfahrung = Erfahrung(
@@ -508,7 +554,12 @@ class TestLearning:
 
     def test_lerne_reward_processes_old_experiences(self):
         """Test that reward learning processes old experiences."""
-        controller = FlowController()
+        controller = FlowController(
+            min_vorlauf=18.0,
+            max_vorlauf=39.0,
+            learning_rate=0.01,
+            trend_history_size=12
+        )
         controller.reward_learning_enabled = True
 
         # Add an old experience manually
@@ -549,7 +600,12 @@ class TestRealisticLearningScenario:
         - Senke Außentemperatur schrittweise auf -5°C
         - Model sollte lernen, dass bei kälteren Temperaturen höherer Vorlauf nötig ist
         """
-        controller = FlowController(min_vorlauf=25.0, max_vorlauf=55.0)
+        controller = FlowController(
+            min_vorlauf=25.0,
+            max_vorlauf=55.0,
+            learning_rate=0.01,
+            trend_history_size=12
+        )
         controller.min_predictions_for_model = 5  # Schnell aus Fallback raus
         controller.reward_learning_enabled = False  # Klassisches Lernen
 
@@ -617,9 +673,14 @@ class TestRealisticLearningScenario:
 class TestModelStats:
     """Test model statistics."""
 
-    def test_get_model_stats_with_experiences(self):
+    def test_get_model_statistics_with_experiences(self):
         """Test statistics with stored experiences."""
-        controller = FlowController()
+        controller = FlowController(
+            min_vorlauf=18.0,
+            max_vorlauf=39.0,
+            learning_rate=0.01,
+            trend_history_size=12
+        )
 
         # Add some experiences
         features = Features()
@@ -636,7 +697,7 @@ class TestModelStats:
             controller.erfahrungs_speicher.erfahrungen[0]
         )
 
-        stats = controller.get_model_stats()
+        stats = controller.get_model_statistics()
 
         assert stats.erfahrungen_total == 5
         assert stats.erfahrungen_gelernt == 1
@@ -779,7 +840,12 @@ class TestFlowCalculation:
 
     def test_flow_calculation(self):
         """Test flow controller learns to adjust based on room temperature feedback."""
-        flow_controller = FlowController(min_vorlauf=25.0, max_vorlauf=55.0)
+        flow_controller = FlowController(
+            min_vorlauf=25.0,
+            max_vorlauf=55.0,
+            learning_rate=0.01,
+            trend_history_size=12
+        )
         flow_controller.min_predictions_for_model = 5  # Schnell aus Fallback raus
         flow_controller.reward_learning_enabled = False  # Klassisches Lernen
 
@@ -839,7 +905,13 @@ class TestFlowCalculation:
 
     def test_flow_calculation2(self):
         """Test flow controller learns to adjust based on room temperature feedback."""
-        flow_controller = FlowController(min_vorlauf=25.0, max_vorlauf=55.0)
+        flow_controller = FlowController(
+            min_vorlauf=25.0,
+            max_vorlauf=55.0,
+            learning_rate=0.01,
+            trend_history_size=12
+        )
+
         flow_controller.min_predictions_for_model = 5  # Schnell aus Fallback raus
         flow_controller.reward_learning_enabled = False  # Klassisches Lernen
 

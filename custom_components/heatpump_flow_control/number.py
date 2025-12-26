@@ -434,7 +434,7 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
             self._available = True
 
             # Update attributes
-            model_stats = self._controller.get_model_stats()
+            model_statistics = self._controller.get_model_statistics()
 
             # Prüfe aktuelle Betriebsart
             current_betriebsart = None
@@ -455,21 +455,21 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
                 ATTR_AUSSEN_TREND: round(features.aussen_trend, 3),
                 ATTR_AUSSEN_TREND_5MIN: round(features.aussen_trend_kurz, 3),
                 ATTR_AUSSEN_TREND_30MIN: round(features.aussen_trend_mittel, 3),
-                ATTR_MODEL_MAE: round(model_stats.mae, 2),
-                ATTR_PREDICTIONS_COUNT: model_stats.predictions_count,
+                ATTR_MODEL_MAE: round(model_statistics.mae, 2),
+                ATTR_PREDICTIONS_COUNT: model_statistics.predictions_count,
                 ATTR_LAST_UPDATE: self._last_update.isoformat(),
                 ATTR_NEXT_UPDATE: self._next_update.isoformat(),
-                "use_fallback": model_stats.use_fallback,
-                "history_size": model_stats.history_size,
+                "use_fallback": model_statistics.use_fallback,
+                "history_size": model_statistics.history_size,
                 "betriebsart": current_betriebsart,
                 "learning_enabled": current_betriebsart == self._betriebsart_heizen_wert
                 if current_betriebsart
                 else True,
                 # NEU: Reward-Learning Statistiken
-                "reward_learning": model_stats.get("reward_learning_enabled", True),
-                "erfahrungen_total": model_stats.get("erfahrungen_total", 0),
-                "erfahrungen_gelernt": model_stats.get("erfahrungen_gelernt", 0),
-                "erfahrungen_wartend": model_stats.get("erfahrungen_wartend", 0),
+                "reward_learning": model_statistics.get("reward_learning_enabled", True),
+                "erfahrungen_total": model_statistics.get("erfahrungen_total", 0),
+                "erfahrungen_gelernt": model_statistics.get("erfahrungen_gelernt", 0),
+                "erfahrungen_wartend": model_statistics.get("erfahrungen_wartend", 0),
             }
 
             # Nach der Berechnung speichern
