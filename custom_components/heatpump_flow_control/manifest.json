@@ -4,7 +4,7 @@
   "documentation": "https://github.com/wrfz/heatpump_flow_control",
   "requirements": ["river==0.23.0"],
   "codeowners": ["@wrfz"],
-  "version": "2025.12.2",
+  "version": "2025.12.4",
   "config_flow": true,
   "iot_class": "calculated"
 }
