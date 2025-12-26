@@ -10,7 +10,6 @@ from custom_components.heatpump_flow_control.const import (
     CONF_LEARNING_RATE,
     CONF_MAX_VORLAUF,
     CONF_MIN_VORLAUF,
-    CONF_POWER_SENSOR,
     CONF_RAUM_IST_SENSOR,
     CONF_RAUM_SOLL_SENSOR,
     CONF_TREND_HISTORY_SIZE,
@@ -61,7 +60,6 @@ def full_config(minimal_config):
         {
             CONF_BETRIEBSART_SENSOR: "sensor.betriebsart",
             CONF_BETRIEBSART_HEIZEN_WERT: "Heizen",
-            CONF_POWER_SENSOR: "sensor.power",
             CONF_MIN_VORLAUF: 25.0,
             CONF_MAX_VORLAUF: 50.0,
             CONF_UPDATE_INTERVAL: 60,
@@ -86,7 +84,6 @@ class TestFlowControlNumberInit:
         assert number._vorlauf_ist_sensor == "sensor.vorlauf_ist"
         assert number._vorlauf_soll_entity == "number.vorlauf_soll"
         assert number._betriebsart_sensor is None
-        assert number._power_sensor is None
         assert isinstance(number._controller, FlowController)
         assert number._attr_native_value is None
         assert number._available is False
@@ -97,7 +94,6 @@ class TestFlowControlNumberInit:
 
         assert number._betriebsart_sensor == "sensor.betriebsart"
         assert number._betriebsart_heizen_wert == "Heizen"
-        assert number._power_sensor == "sensor.power"
         assert number._min_vorlauf == 25.0
         assert number._max_vorlauf == 50.0
         assert number._update_interval_minutes == 60
@@ -496,8 +492,6 @@ class TestAsyncUpdateVorlaufSoll:
                 aussen_trend=0.5,
                 aussen_trend_kurz=0.3,
                 aussen_trend_mittel=0.2,
-                power_avg_1h=0.0,
-                power_favorable_hours=0.0,
             )
             mock_hass.async_add_executor_job.side_effect = [
                 (38.5, mock_features),  # berechne_vorlauf_soll
@@ -543,8 +537,6 @@ class TestAsyncUpdateVorlaufSoll:
                 aussen_trend = 0.5,
                 aussen_trend_kurz = 0.3,
                 aussen_trend_mittel = 0.2,
-                power_avg_1h = 0.0,
-                power_favorable_hours = 0.0,
             )
             mock_hass.async_add_executor_job.side_effect = [
                 (38.5, mock_features),  # berechne_vorlauf_soll
@@ -563,62 +555,6 @@ class TestAsyncUpdateVorlaufSoll:
             await number._async_update_vorlauf_soll()
 
             mock_set.assert_called_once_with(38.5)
-
-    @pytest.mark.asyncio
-    async def test_update_with_power_sensor(self, mock_hass, full_config):
-        """Test update with power sensor configured."""
-        number = FlowControlNumber(mock_hass, full_config, "test_entry")
-        number.async_write_ha_state = Mock()
-
-        mock_sensor_data = SensorValues(
-            aussen_temp=5.0,
-            raum_ist=22.0,
-            raum_soll=21.0,
-            vorlauf_ist=35.0
-        )
-
-        # Mock power sensor
-        power_state = MagicMock()
-        power_state.state = "1500.0"
-
-        with (
-            patch.object(
-                number, "_async_get_sensor_values", return_value=mock_sensor_data
-            ),
-            patch.object(
-                number._controller, "update_power_sensor"
-            ) as mock_update_power,
-        ):
-            # Mock controller calculation
-            mock_features = {
-                "raum_abweichung": 1.0,
-                "aussen_trend": 0.5,
-                "aussen_trend_kurz": 0.3,
-                "aussen_trend_mittel": 0.2,
-                "power_avg_1h": 1400.0,
-                "power_favorable_hours": 0.3,
-            }
-            mock_hass.async_add_executor_job.side_effect = [
-                (38.5, mock_features),  # berechne_vorlauf_soll
-                None,  # save_model
-            ]
-
-            # Mock betriebsart, switch and power states
-            betriebsart_state = MagicMock()
-            betriebsart_state.state = "Heizen"
-            switch_state = MagicMock()
-            switch_state.state = "off"
-            mock_hass.states.get.side_effect = [
-                power_state,  # power sensor
-                betriebsart_state,  # betriebsart sensor
-                switch_state,  # control switch
-            ]
-
-            await number._async_update_vorlauf_soll()
-
-            assert number._attr_native_value == 38.5
-            # Power sensor should be updated
-            mock_update_power.assert_called_once_with(1500.0)
 
     @pytest.mark.asyncio
     async def test_update_sensors_unavailable(self, mock_hass, minimal_config):

@@ -13,7 +13,6 @@ from custom_components.heatpump_flow_control.const import (
     CONF_LEARNING_RATE,
     CONF_MAX_VORLAUF,
     CONF_MIN_VORLAUF,
-    CONF_POWER_SENSOR,
     CONF_RAUM_IST_SENSOR,
     CONF_RAUM_SOLL_SENSOR,
     CONF_TREND_HISTORY_SIZE,
@@ -74,7 +73,6 @@ def full_config(minimal_config):
         {
             CONF_BETRIEBSART_SENSOR: "sensor.betriebsart",
             CONF_BETRIEBSART_HEIZEN_WERT: "Heizen",
-            CONF_POWER_SENSOR: "sensor.power",
             CONF_MIN_VORLAUF: 25.0,
             CONF_MAX_VORLAUF: 50.0,
             CONF_UPDATE_INTERVAL: 60,
@@ -206,7 +204,6 @@ class TestFlowControlNumberIntegration:
                 "sensor.raum_soll": MagicMock(state="21.0", domain="input_number"),
                 "sensor.vorlauf_ist": MagicMock(state="35.0"),
                 "sensor.betriebsart": MagicMock(state="Heizen"),
-                "sensor.power": MagicMock(state="1500.0"),
                 f"switch.{DOMAIN}_aktiv": MagicMock(state="off"),
             }
             return states.get(entity_id)
@@ -219,8 +216,6 @@ class TestFlowControlNumberIntegration:
             aussen_trend = 0.5,
             aussen_trend_kurz = 0.3,
             aussen_trend_mittel = 0.2,
-            power_avg_1h = 1400.0,
-            power_favorable_hours = 0.3,
         )
         mock_hass.async_add_executor_job.return_value = (38.5, mock_features)
 
@@ -237,7 +232,6 @@ class TestFlowControlNumberIntegration:
         attrs = number.extra_state_attributes
         assert attrs["aussen_temp"] == 5.0
         assert attrs["raum_ist"] == 22.0
-        assert attrs["power_current"] == 1500.0
         assert attrs["betriebsart"] == "Heizen"
 
     @pytest.mark.asyncio

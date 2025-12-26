@@ -1,11 +1,10 @@
 """Number platform for Heatpump Flow Control integration."""
-
 import asyncio
 from datetime import timedelta
 import logging
 from pathlib import Path
 import pickle
-from typing import Any
+from typing import Any, cast
 
 from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
@@ -32,9 +31,6 @@ from .const import (
     ATTR_LAST_UPDATE,
     ATTR_MODEL_MAE,
     ATTR_NEXT_UPDATE,
-    ATTR_POWER_AVG_1H,
-    ATTR_POWER_CURRENT,
-    ATTR_POWER_FAVORABLE,
     ATTR_PREDICTIONS_COUNT,
     ATTR_RAUM_ABWEICHUNG,
     ATTR_RAUM_IST,
@@ -46,7 +42,6 @@ from .const import (
     CONF_LEARNING_RATE,
     CONF_MAX_VORLAUF,
     CONF_MIN_VORLAUF,
-    CONF_POWER_SENSOR,
     CONF_RAUM_IST_SENSOR,
     CONF_RAUM_SOLL_SENSOR,
     CONF_TREND_HISTORY_SIZE,
@@ -117,9 +112,6 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
         self._betriebsart_heizen_wert = config.get(
             CONF_BETRIEBSART_HEIZEN_WERT, DEFAULT_BETRIEBSART_HEIZEN_WERT
         )
-
-        # Optional: Power-Sensor (PV-Überschuss/Strompreis)
-        self._power_sensor = config.get(CONF_POWER_SENSOR)
 
         # Konfiguration
         self._min_vorlauf = config.get(CONF_MIN_VORLAUF, DEFAULT_MIN_VORLAUF)
@@ -362,55 +354,48 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
         _LOGGER.info("_async_get_sensor_values()")
 
         try:
-            aussen_temp_state = self.hass.states.get(self._aussen_temp_sensor)
-            raum_ist_state = self.hass.states.get(self._raum_ist_sensor)
-            raum_soll_state = self.hass.states.get(self._raum_soll_sensor)
-            vorlauf_ist_state = self.hass.states.get(self._vorlauf_ist_sensor)
+            aussen_temp_state_or_none = self.hass.states.get(self._aussen_temp_sensor)
+            raum_ist_state_or_none = self.hass.states.get(self._raum_ist_sensor)
+            raum_soll_state_or_none = self.hass.states.get(self._raum_soll_sensor)
+            vorlauf_ist_state_or_none = self.hass.states.get(self._vorlauf_ist_sensor)
 
             _LOGGER.info(
                 "Reading sensors: aussen=%s, raum_ist=%s, raum_soll=%s, vorlauf_ist=%s",
-                self._format_sensor_as_float(aussen_temp_state),
-                self._format_sensor_as_float(raum_ist_state),
-                self._format_sensor_as_float(raum_soll_state),
-                self._format_sensor_as_float(vorlauf_ist_state),
+                self._format_sensor_as_float(aussen_temp_state_or_none),
+                self._format_sensor_as_float(raum_ist_state_or_none),
+                self._format_sensor_as_float(raum_soll_state_or_none),
+                self._format_sensor_as_float(vorlauf_ist_state_or_none),
             )
 
-            if (
-                aussen_temp_state is None
-                or raum_ist_state is None
-                or raum_soll_state is None
-                or vorlauf_ist_state is None
-            ):
-                _LOGGER.warning("One or more sensor states unavailable")
-                return None
-
             # Prüfe auf unavailable/unknown
-            if aussen_temp_state.state in ("unavailable", "unknown"):
-                _LOGGER.warning(
-                    "Sensor %s is %s", self._aussen_temp_sensor, aussen_temp_state.state
-                )
-                return None
-            if raum_ist_state.state in ("unavailable", "unknown"):
-                _LOGGER.warning(
-                    "Sensor %s is %s", self._raum_ist_sensor, raum_ist_state.state
-                )
-                return None
-            if vorlauf_ist_state.state in ("unavailable", "unknown"):
-                _LOGGER.warning(
-                    "Sensor %s is %s", self._vorlauf_ist_sensor, vorlauf_ist_state.state
-                )
-                return None
+            sensors = [
+                (self._aussen_temp_sensor, aussen_temp_state_or_none),
+                (self._raum_ist_sensor, raum_ist_state_or_none),
+                (self._raum_soll_sensor, raum_soll_state_or_none),
+                (self._vorlauf_ist_sensor, vorlauf_ist_state_or_none),
+            ]
+
+            for entity_id, state_obj in sensors:
+                if state_obj is None:
+                    _LOGGER.warning("Sensor %s state is None", entity_id)
+                    return None
+                if state_obj.state in ("unavailable", "unknown"):
+                    _LOGGER.warning("Sensor %s is %s", entity_id, state_obj.state)
+                    return None
 
             # Extract temperature values
-            aussen_temp = float(aussen_temp_state.state)
-            raum_ist = float(raum_ist_state.state)
-            vorlauf_ist = float(vorlauf_ist_state.state)
+
+            aussen_temp = float(cast(State, aussen_temp_state_or_none).state)
+            raum_ist = float(cast(State, raum_ist_state_or_none).state)
+            vorlauf_ist = float(cast(State, vorlauf_ist_state_or_none).state)
+            raum_soll_state = cast(State, raum_soll_state_or_none)
 
             # Raum-Soll kann von Climate-Entity oder Input-Number kommen
-            raum_soll_value = raum_soll_state.state
             if raum_soll_state.domain == "climate":
                 raum_soll = float(raum_soll_state.attributes.get("temperature", 21.0))
             else:
+                raum_soll = cast(State, raum_soll_state)
+                raum_soll_value = float(raum_soll.state)
                 raum_soll = float(raum_soll_value)
 
         except (ValueError, TypeError) as e:
@@ -433,25 +418,10 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
                 self.async_write_ha_state()
                 return
 
-            # NEU: Power-Sensor auslesen (optional)
-            power_aktuell = None
-            if self._power_sensor:
-                power_state = self.hass.states.get(self._power_sensor)
-                if power_state and power_state.state not in ("unavailable", "unknown"):
-                    try:
-                        power_aktuell = float(power_state.state)
-                        self._controller.update_power_sensor(power_aktuell)
-                        _LOGGER.debug("Power-Sensor: %.1f W", power_aktuell)
-                    except ValueError:
-                        _LOGGER.warning(
-                            "Power-Sensor Wert ungültig: %s", power_state.state
-                        )
-
             # Berechne neuen Vorlauf-Soll
             vorlauf_soll, features = await self.hass.async_add_executor_job(
                 self._controller.berechne_vorlauf_soll,
                 sensor_values,
-                power_aktuell,
             )
 
             # Update state
@@ -500,19 +470,6 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
                 "erfahrungen_total": model_stats.get("erfahrungen_total", 0),
                 "erfahrungen_gelernt": model_stats.get("erfahrungen_gelernt", 0),
                 "erfahrungen_wartend": model_stats.get("erfahrungen_wartend", 0),
-                # NEU: Power-Statistiken (wenn aktiviert)
-                ATTR_POWER_CURRENT: round(power_aktuell, 1)
-                if power_aktuell is not None
-                else None,
-                ATTR_POWER_AVG_1H: round(features.get("power_avg_1h", 0), 1)
-                if self._power_sensor
-                else None,
-                ATTR_POWER_FAVORABLE: round(
-                    features.get("power_favorable_hours", 0) * 100, 1
-                )
-                if self._power_sensor
-                else None,
-                "power_enabled": self._controller.power_enabled,
             }
 
             # Nach der Berechnung speichern

@@ -32,7 +32,6 @@ class TestErfahrungsSpeicher:
             vorlauf_gesetzt=35.0,
             raum_ist_vorher=22.0,
             raum_soll=21.0,
-            power_aktuell=None,
         )
 
         assert len(speicher.erfahrungen) == 1
@@ -166,8 +165,6 @@ class TestFlowControllerInit:
         assert controller.predictions_count == 0
         assert hasattr(controller, "model")
         assert hasattr(controller, "erfahrungs_speicher")
-        assert controller.power_enabled is False
-        assert len(controller.power_history) == 0
 
     def test_custom_initialization(self):
         """Test controller with custom parameters."""
@@ -248,15 +245,11 @@ class TestFlowControllerInit:
         assert controller.predictions_count == 0, (
             "Predictions zähler muss zurückgesetzt sein"
         )
-        delattr(controller, "power_enabled")
-        delattr(controller, "power_history")
         delattr(controller, "reward_learning_enabled")
 
         # Should not crash and re-initialize
         controller._ensure_attributes()
 
-        assert hasattr(controller, "power_enabled")
-        assert hasattr(controller, "power_history")
         assert hasattr(controller, "reward_learning_enabled")
 
 
@@ -274,7 +267,6 @@ class TestFeatureCreation:
                 raum_soll=21.0,
                 vorlauf_ist=35.0
             ),
-            power_aktuell=None
         )
 
         # Check basic features
@@ -291,10 +283,6 @@ class TestFeatureCreation:
         assert features.stunde_cos is not None
         assert features.wochentag_sin is not None
         assert features.wochentag_cos is not None
-
-        # Check power features are zero (not enabled)
-        assert features.power_avg_same_hour == 0.0
-        assert features.power_avg_1h == 0.0
 
     def test_erstelle_features_with_trends(self):
         """Test feature creation with temperature trends."""
@@ -315,27 +303,12 @@ class TestFeatureCreation:
                 raum_soll=21.0,
                 vorlauf_ist=35.0
             ),
-            power_aktuell=None,
         )
 
         # Trends should be calculated (may be 0 with insufficient data)
         # Just check they exist
         assert features.aussen_trend is not None
         assert features.aussen_trend_kurz is not None
-
-    def test_berechne_power_features_disabled(self):
-        """Test power features when sensor is disabled."""
-        controller = FlowController()
-        controller.power_enabled = False
-
-        now = datetime.now()
-        features = controller._berechne_power_features(now, 12.0, None)
-
-        # All power features should be 0
-        assert features.power_avg_same_hour == 0.0
-        assert features.power_avg_1h == 0.0
-        assert features.power_avg_3h == 0.0
-        assert features.power_favorable_hours == 0.0
 
 class TestPrediction:
     """Test prediction logic."""
@@ -500,7 +473,6 @@ class TestLearning:
             raum_ist_vorher=21.0,
             raum_soll=22.0,
             vorlauf_gesetzt=38.0,
-            power_aktuell=None,
         )
 
         reward, y_target = controller._bewerte_erfahrung(
@@ -523,7 +495,6 @@ class TestLearning:
             raum_ist_vorher=22.0,
             raum_soll=22.0,
             vorlauf_gesetzt=40.0,  # Too high
-            power_aktuell=None,
         )
 
         reward, y_target = controller._bewerte_erfahrung(
@@ -566,46 +537,6 @@ class TestLearning:
 
         # Should have attempted learning (check stats exist)
         assert isinstance(stats, dict)
-
-
-class TestPowerSensor:
-    """Test power sensor functionality."""
-
-    def test_update_power_sensor_enables(self):
-        """Test that updating power sensor enables it."""
-        controller = FlowController()
-        assert controller.power_enabled is False
-
-        controller.update_power_sensor(1500.0)
-        assert controller.power_enabled is True
-
-    def test_update_power_sensor_disables(self):
-        """Test that None disables power sensor."""
-        controller = FlowController()
-        controller.power_enabled = True
-
-        controller.update_power_sensor(None)
-        assert controller.power_enabled is False
-
-    def test_berechne_vorlauf_soll_with_power(self):
-        """Test calculation with power sensor."""
-        controller = FlowController()
-        controller.use_fallback = False
-
-        # Should not crash with power value
-        vorlauf_soll, features = controller.berechne_vorlauf_soll(
-            SensorValues(
-                aussen_temp=5.0,
-                raum_ist=22.0,
-                raum_soll=21.0,
-                vorlauf_ist=35.0,
-            ),
-            power_aktuell=1500.0,
-        )
-
-        assert vorlauf_soll is not None
-        assert features.power_avg_1h >= 0.0
-
 
 class TestRealisticLearningScenario:
     """Test realistic learning scenarios with full sensor setup."""

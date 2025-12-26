@@ -1,7 +1,7 @@
 """Shared types."""
 
 from collections.abc import Iterator
-from dataclasses import asdict, dataclass, fields, replace
+from dataclasses import asdict, dataclass, fields, replace, field
 from datetime import datetime
 from typing import Any
 
@@ -41,15 +41,14 @@ class LongtermFeatures:
     vorlauf_same_hour_avg: float = 0.0
 
 @dataclass
-class PowerFeatures:
-    """Model power-related features."""
-    power_avg_same_hour: float = 0.0
-    power_avg_1h: float = 0.0
-    power_avg_3h: float = 0.0
-    power_favorable_hours: float = 0.0
+class Trends:
+
+    aussen_trend: float  = 0.0
+    aussen_trend_kurz: float = 0.0
+    aussen_trend_mittel: float = 0.0
 
 @dataclass
-class Features(LongtermFeatures, PowerFeatures):
+class Features(LongtermFeatures):
     """Model features."""
     aussen_temp: float = 0.0
     raum_ist: float = 0.0
@@ -71,12 +70,6 @@ class Features(LongtermFeatures, PowerFeatures):
         """Set long_term_features attributes to self."""
         for field in fields(long_term_features):
                     value = getattr(long_term_features, field.name)
-                    setattr(self, field.name, value)
-
-    def set_power_features(self, power_features: PowerFeatures):
-        """Set power_features attributes to self."""
-        for field in fields(power_features):
-                    value = getattr(power_features, field.name)
                     setattr(self, field.name, value)
 
     def to_dict(self) -> dict[str, float]:
@@ -105,5 +98,4 @@ class Erfahrung:
     vorlauf_gesetzt: float
     raum_ist_vorher: float
     raum_soll: float
-    power_aktuell: float | None = None
     gelernt: bool = False
