@@ -124,6 +124,13 @@ class FlowController:
     ) -> None:
         """Initialize the flow controller."""
 
+        self.predictions_count = 0
+
+        self.erfahrungs_speicher = ErfahrungsSpeicher(max_size=200)
+        self.reward_learning_enabled = True  # Kann deaktiviert werden für Tests
+        self.min_reward_hours = 2.0  # Mindeststunden bis Bewertung
+        self.max_reward_hours = 6.0  # Maximalstunden bis Bewertung
+
         self._setup(
             min_vorlauf=min_vorlauf,
             max_vorlauf=max_vorlauf,
@@ -194,11 +201,7 @@ class FlowController:
 
         self.min_predictions_for_model = 10
 
-        # NEU: Erfahrungsspeicher für Reward-basiertes Lernen
-        self.erfahrungs_speicher = ErfahrungsSpeicher(max_size=200)
-        self.reward_learning_enabled = True  # Kann deaktiviert werden für Tests
-        self.min_reward_hours = 2.0  # Mindeststunden bis Bewertung
-        self.max_reward_hours = 6.0  # Maximalstunden bis Bewertung
+        self._ensure_attributes()
 
         _LOGGER.info(
             "_setup(): min=%s, max=%s, lr=%s, history=%s, longterm=%s, reward_learning=%s",
