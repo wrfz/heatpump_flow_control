@@ -152,3 +152,10 @@ class Erfahrung:
     raum_ist_vorher: float
     raum_soll: float
     gelernt: bool = False
+
+@dataclass
+class VorlaufSollWeight:
+    """Vorlauf-Soll mit zugehörigem Gewicht."""
+
+    vorlauf_soll: float
+    weight: float

@@ -99,9 +99,6 @@ class TestFlowControllerInit:
         )
         #delattr(controller, "reward_learning_enabled")
 
-        # Should not crash and re-initialize
-        controller._ensure_attributes()
-
         #assert hasattr(controller, "reward_learning_enabled")
 
 
@@ -353,14 +350,14 @@ class TestLearning:
             vorlauf_soll=38.0,
         )
 
-        reward, y_target = controller._bewerte_erfahrung(
+        vorlauf_soll_weight = controller._bewerte_erfahrung(
             erfahrung=erfahrung,
-            raum_ist=21.5,  # Improved
-            aussen_trend=0.0,
+            raum_ist_jetzt=21.5
         )
 
         # Should have some reward (may be 0 or positive depending on logic)
-        assert reward >= 0
+        assert vorlauf_soll_weight.vorlauf_soll == 37
+        assert vorlauf_soll_weight.weight == 2.0
 
     def test_bewerte_erfahrung_negative_reward(self):
         """Test experience evaluation with negative reward."""
@@ -380,14 +377,14 @@ class TestLearning:
             vorlauf_soll=40.0,  # Too high
         )
 
-        reward, y_target = controller._bewerte_erfahrung(
+        vorlauf_soll_weight = controller._bewerte_erfahrung(
             erfahrung=erfahrung,
-            raum_ist=23.0,  # Worse
-            aussen_trend=0.0,
+            raum_ist_jetzt=23.0
         )
 
         # Should have negative reward (room got worse)
-        assert reward < 0
+        assert vorlauf_soll_weight.vorlauf_soll == 38
+        assert vorlauf_soll_weight.weight == 2.0
 
 class TestRealisticLearningScenario:
     """Test realistic learning scenarios with full sensor setup."""

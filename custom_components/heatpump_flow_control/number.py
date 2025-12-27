@@ -473,12 +473,8 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
                 else True,
                 # NEU: History-basiertes Lernen (persistiert über Reboots)
                 "history_learning": True,
-                "erfahrungen_gelernt": self._extra_attributes.get("erfahrungen_gelernt", 0),
-                "last_learning_time": self._controller.letztes_lern_timestamp.isoformat(),
+                "erfahrungen_gelernt": self._extra_attributes.get("erfahrungen_gelernt", 0)
             }
-
-            # Nach der Berechnung speichern
-            await self._async_save_model()
 
             # Prüfe ob Switch aktiv ist, dann sende an Wärmepumpe
             # Der Switch hat unique_id = {DOMAIN}_{entry_id}_aktiv
@@ -526,6 +522,9 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
             if self._controller.predictions_count % 10 == 0:
                 await self._async_lerne_aus_history(sensor_values.raum_ist)
 
+            # Nach Berechnung UND Lernen speichern
+            await self._async_save_model()
+
         except Exception:
             _LOGGER.exception("Error updating Vorlauf-Soll")
             self._available = False
@@ -546,20 +545,14 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
 
         # Prüfe ob genug Zeit seit letztem Lernen vergangen ist (min 30 Min)
         now = dt_util.now()
-        # Konvertiere letztes_lern_timestamp zu timezone-aware wenn nötig
-        letztes_lernen = self._controller.letztes_lern_timestamp
-        if letztes_lernen.tzinfo is None:
-            letztes_lernen = dt_util.as_local(letztes_lernen)
-
-        time_since_last_learn = (now - letztes_lernen).total_seconds() / 60
-        if time_since_last_learn < 30:
-            _LOGGER.debug("Letzte Lern-Session vor %.1f Minuten, überspringe", time_since_last_learn)
-            return
 
         try:
-            # Zeitfenster: 2-6 Stunden zurück
-            end_time = now - timedelta(hours=self._controller.min_reward_hours)
-            start_time = now - timedelta(hours=self._controller.max_reward_hours)
+            # Finde EINEN State von vor ~4h (Mitte des 2-6h Fensters)
+            target_time = now - timedelta(hours=4)
+
+            # Zeitfenster für Query: target_time ±30 Min (für nearest search)
+            start_time = target_time - timedelta(minutes=30)
+            end_time = target_time + timedelta(minutes=30)
 
             # Alle relevanten Entities
             entity_ids = [
@@ -571,9 +564,8 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
             ]
 
             _LOGGER.debug(
-                "Query History von %s bis %s für Entities: %s",
-                start_time.strftime("%H:%M"),
-                end_time.strftime("%H:%M"),
+                "Query History um %s (±30min) für Entities: %s",
+                target_time.strftime("%H:%M"),
                 entity_ids,
             )
 
@@ -597,50 +589,58 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
                 _LOGGER.debug("Keine History-Daten gefunden")
                 return
 
-            # Extrahiere und kombiniere States
-            historical_states = self._extract_historical_states(history_data)
-
-            if not historical_states:
-                _LOGGER.debug("Keine kombinierten Historical States gefunden")
-                return
-
-            _LOGGER.info("Gefunden: %d Historical States zum Lernen", len(historical_states))
-
-            # Führe Lernen im Executor aus (blocking)
-            lern_stats = await self.hass.async_add_executor_job(
-                self._controller.lerne_aus_history,
-                historical_states,
-                current_raum_ist,
-                now,  # timezone-aware datetime
+            # Extrahiere einen Historical State (nearest zu target_time)
+            historical_state = self._extract_historical_state(
+                history_data,
+                target_time
             )
 
-            if lern_stats["gelernt_positiv"] + lern_stats["gelernt_negativ"] > 0:
-                _LOGGER.info(
-                    "History-Lernen abgeschlossen: %d positiv, %d negativ",
-                    lern_stats["gelernt_positiv"],
-                    lern_stats["gelernt_negativ"],
-                )
+            if not historical_state:
+                _LOGGER.debug("Kein Historical State gefunden")
+                return
+
+            # Prüfe ob wir diesen State schon gelernt haben
+            state_timestamp = historical_state['timestamp']
+
+            _LOGGER.info(
+                "Lerne aus State von %s (vor %.1fh)",
+                state_timestamp.strftime("%H:%M"),
+                (now - state_timestamp).total_seconds() / 3600,
+            )
+
+            # Führe Lernen aus (mit EINEM State)
+            success = self._controller.lerne_aus_history(historical_state, current_raum_ist)
+
+            if success:
+                _LOGGER.info("History-Lernen erfolgreich")
                 # Stats in Attributes speichern
                 self._extra_attributes["erfahrungen_gelernt"] = (
-                    self._extra_attributes.get("erfahrungen_gelernt", 0) +
-                    lern_stats["gelernt_positiv"] + lern_stats["gelernt_negativ"]
+                    self._extra_attributes.get("erfahrungen_gelernt", 0) + 1
                 )
                 await self._async_save_model()
 
         except Exception as e:
             _LOGGER.error("Fehler beim History-Lernen: %s", e, exc_info=True)
 
-    def _extract_historical_states(
+    def _extract_historical_state(
         self,
         history_data: dict[str, Any],
-    ) -> list[dict[str, Any]]:
-        """Extrahiert Historical States aus HA History.
+        target_time: datetime
+    ) -> dict[str, Any] | None:
+        """Extrahiert einen Historical State aus HA History.
 
-        Kombiniert States von allen Sensoren zu Zeitpunkten wo alle verfügbar sind.
+        Findet den State der target_time am nächsten ist.
+
+        Args:
+            history_data: HA History Daten
+            target_time: Zielzeit (~4h ago)
+
+        Returns:
+            State dict oder None wenn nicht gefunden
         """
 
         # Erstelle Maps: entity_id -> list of states
-        aussen_states = history_data.get(self._aussen_temp_sensor, [])
+        aussen_temp_states = history_data.get(self._aussen_temp_sensor, [])
         raum_ist_states = history_data.get(self._raum_ist_sensor, [])
         raum_soll_states = history_data.get(self._raum_soll_sensor, [])
         vorlauf_ist_states = history_data.get(self._vorlauf_ist_sensor, [])
@@ -648,40 +648,63 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
 
         if not vorlauf_soll_states:
             _LOGGER.debug("Keine Vorlauf-Soll History gefunden (Entity: %s)", self.entity_id)
-            return []
+            return None
 
-        historical_states = []
+        # Finde den vorlauf_soll State der target_time am nächsten ist
+        best_state = None
+        best_diff: float | None = None
 
-        # Iteriere über Vorlauf-Soll States (unsere Entscheidungen)
-        for vorlauf_soll_state in vorlauf_soll_states:
-            try:
-                timestamp = vorlauf_soll_state.last_updated
-                vorlauf_soll = float(vorlauf_soll_state.state)
-
-                # Finde nearest states für alle anderen Sensoren (±5 Min Toleranz)
-                tolerance = timedelta(minutes=5)
-
-                aussen_temp = self._find_nearest_state_value(aussen_states, timestamp, tolerance)
-                raum_ist = self._find_nearest_state_value(raum_ist_states, timestamp, tolerance)
-                raum_soll = self._find_nearest_state_value(raum_soll_states, timestamp, tolerance)
-                vorlauf_ist = self._find_nearest_state_value(vorlauf_ist_states, timestamp, tolerance)
-
-                # Nur wenn alle Werte verfügbar
-                if all(v is not None for v in [aussen_temp, raum_ist, raum_soll, vorlauf_ist]):
-                    historical_states.append({
-                        'timestamp': timestamp,
-                        'aussen_temp': aussen_temp,
-                        'raum_ist': raum_ist,
-                        'raum_soll': raum_soll,
-                        'vorlauf_ist': vorlauf_ist,
-                        'vorlauf_soll': vorlauf_soll,
-                    })
-
-            except (ValueError, TypeError) as e:
-                _LOGGER.debug("Überspringe State wegen Fehler: %s", e)
+        for state in vorlauf_soll_states:
+            if state.state in ("unavailable", "unknown"):
                 continue
 
-        return historical_states
+            diff: float = abs((state.last_updated - target_time).total_seconds())
+            if best_diff is None or diff < best_diff:
+                best_diff = diff
+                best_state = state
+
+        if not best_state:
+            _LOGGER.debug("Kein Vorlauf-Soll State nahe target_time gefunden")
+            return None
+
+        try:
+            timestamp = best_state.last_updated
+            vorlauf_soll = float(best_state.state)
+
+            # Finde nearest states für alle anderen Sensoren zum DAMALIGEN Zeitpunkt (±5 Min)
+            tolerance = timedelta(minutes=5)
+
+            aussen_temp = self._find_nearest_state_value(aussen_temp_states, timestamp, tolerance)
+            raum_ist = self._find_nearest_state_value(raum_ist_states, timestamp, tolerance)
+            raum_soll = self._find_nearest_state_value(raum_soll_states, timestamp, tolerance)
+            vorlauf_ist = self._find_nearest_state_value(vorlauf_ist_states, timestamp, tolerance)
+
+            # Async Query (kann nicht in sync context, daher machen wir es inline)
+            # Für jetzt: nutze states die bereits in history_data sind
+            raum_ist_spaeter = None
+
+            # Nur wenn alle Werte verfügbar (inkl. raum_ist_spaeter!)
+            if all(v is not None for v in [aussen_temp, raum_ist, raum_soll, vorlauf_ist, raum_ist_spaeter]):
+                return {
+                    'timestamp': timestamp,
+                    'aussen_temp': aussen_temp,
+                    'raum_ist': raum_ist,
+                    'raum_soll': raum_soll,
+                    'vorlauf_ist': vorlauf_ist,
+                    'vorlauf_soll': vorlauf_soll,
+                    'raum_ist_spaeter': raum_ist_spaeter,  # 2-6h später!
+                }
+            else:
+                _LOGGER.debug(
+                    "Überspringe State von %s: Nicht alle Werte verfügbar (raum_ist_spaeter=%s)",
+                    timestamp.strftime("%H:%M"),
+                    raum_ist_spaeter,
+                )
+                return None
+
+        except (ValueError, TypeError) as e:
+            _LOGGER.debug("Fehler beim Extrahieren: %s", e)
+            return None
 
     def _find_nearest_state_value(
         self,

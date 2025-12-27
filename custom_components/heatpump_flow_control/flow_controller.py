@@ -3,7 +3,6 @@
 from datetime import datetime, timedelta
 import logging
 import math
-import statistics
 from typing import Any
 
 from river import compose, linear_model, metrics, optim, preprocessing
@@ -15,7 +14,7 @@ from .types import (
     HistoryBuffer,
     ModelStats,
     SensorValues,
-    Trends,
+    VorlaufSollWeight,
 )
 
 # pylint: disable=hass-logger-capital
@@ -42,11 +41,6 @@ class FlowController:
         self.trend_history_size = trend_history_size
 
         self.predictions_count = 0
-
-        # History-basiertes Lernen: Kein ErfahrungsSpeicher mehr nötig
-        self.min_reward_hours = 2.0  # Mindeststunden bis Bewertung
-        self.max_reward_hours = 6.0  # Maximalstunden bis Bewertung
-        self.letztes_lern_timestamp = datetime.now() - timedelta(hours=24)  # Vermeide Doppel-Lernen
 
         self._setup()
 
@@ -101,8 +95,6 @@ class FlowController:
 
         self.min_predictions_for_model = 10
 
-        self._ensure_attributes()
-
         _LOGGER.info(
             "_setup(): min=%s, max=%s, lr=%s, history=%s",
             self.min_vorlauf,
@@ -110,18 +102,6 @@ class FlowController:
             self.learning_rate,
             self.trend_history_size,
         )
-
-    def _ensure_attributes(self) -> None:
-        """Stellt sicher, dass alle Attribute existieren (Backwards Compatibility).
-
-        Wird bei Bedarf aufgerufen wenn Objekt aus Storage geladen wurde.
-        """
-        if not hasattr(self, "min_reward_hours"):
-            self.min_reward_hours = 2.0
-        if not hasattr(self, "max_reward_hours"):
-            self.max_reward_hours = 6.0
-        if not hasattr(self, "letztes_lern_timestamp"):
-            self.letztes_lern_timestamp = datetime.now() - timedelta(hours=24)
 
     def _heizkurve_fallback(self, aussen_temp: float, raum_abweichung: float) -> float:
         """Fallback Heizkurve für Kaltstart.
@@ -149,22 +129,6 @@ class FlowController:
         _LOGGER.info("_heizkurve_fallback() => %.1f", vorlauf)
 
         return vorlauf
-
-    def _berechne_trends(self) -> Trends:
-        """Berechnet zeitnormierte Temperatur-Trends in °C/Stunde.
-
-        Returns:
-            Trends mit °C/Stunde normalisierten Werten
-        """
-
-        _LOGGER.info("_berechne_trends()")
-
-        return Trends(
-            aussen_trend_1h=self.aussen_temp_history.get_trend(hours=1.0),
-            aussen_trend_2h=self.aussen_temp_history.get_trend(hours=2.0),
-            aussen_trend_3h=self.aussen_temp_history.get_trend(hours=3.0),
-            aussen_trend_6h=self.aussen_temp_history.get_trend(hours=6.0),
-        )
 
     def _erstelle_features(
         self,
@@ -214,8 +178,6 @@ class FlowController:
                 while history and history[0].timestamp < cutoff_longterm:
                     history.popleft()
 
-        trends = self._berechne_trends()
-
         # Raum-Abweichung
         raum_abweichung = sensor_values.raum_soll - sensor_values.raum_ist
 
@@ -235,10 +197,6 @@ class FlowController:
             raum_soll = sensor_values.raum_soll,
             vorlauf_ist = sensor_values.vorlauf_ist,
             raum_abweichung = raum_abweichung,
-            aussen_trend_1h=trends.aussen_trend_1h,
-            aussen_trend_2h=trends.aussen_trend_2h,
-            aussen_trend_3h=trends.aussen_trend_3h,
-            aussen_trend_6h=trends.aussen_trend_6h,
             stunde_sin = stunde_sin,
             stunde_cos = stunde_cos,
             wochentag_sin = wochentag_sin,
@@ -251,213 +209,102 @@ class FlowController:
     def _bewerte_erfahrung(
         self,
         erfahrung: Erfahrung,
-        raum_ist: float,
-        aussen_trend: float = 0.0,
-    ) -> tuple[float, float]:
-        """Bewertet eine Erfahrung basierend auf dem Ergebnis.
+        raum_ist_jetzt: float,
+    ) -> VorlaufSollWeight:
+        """Berechnet korrigierten Vorlauf."""
 
-        Args:
-            erfahrung: Die zu bewertende Erfahrung
-            raum_ist_jetzt: Aktuelle Raumtemperatur (2-3h nach Entscheidung)
-            aussen_trend: Aktueller Außentemperatur-Trend
+        abweichung = abs(raum_ist_jetzt - erfahrung.raum_soll)
 
-        Returns:
-            tuple: (reward, korrigierter_vorlauf)
-                - reward: -1.0 bis +1.0 (wie gut war die Entscheidung)
-                - korrigierter_vorlauf: Verbesserter Sollwert falls reward < 0
-        """
+        if abweichung < 0.3:
+            # War gut!
+            korrigierter_vorlauf = erfahrung.vorlauf_soll
+            weight = 1.0
 
-        _LOGGER.info("_bewerte_erfahrung()")
+        # War schlecht → Korrigiere
+        elif abweichung < 0:  # Zu kalt
+            korrigierter_vorlauf = erfahrung.vorlauf_soll + abweichung * 3.0
+            weight = 3.0
 
-        raum_soll = erfahrung.raum_soll
-        vorlauf_soll = erfahrung.vorlauf_soll
-
-        # Wie groß ist die Abweichung jetzt (2-3h später)?
-        abweichung = raum_ist - raum_soll
-        abs_abweichung = abs(abweichung)
-
-        # Bewertung berechnen
-        if abs_abweichung < 0.3:
-            reward = 1.0  # Perfekt!
-        elif abs_abweichung < 0.5:
-            reward = 0.5  # Gut
-        elif abs_abweichung < 0.8:
-            reward = 0.0  # OK
-        elif abs_abweichung < 1.2:
-            reward = -0.5  # Nicht gut
+        # Zu warm
         else:
-            reward = -1.0  # Schlecht
+            korrigierter_vorlauf = erfahrung.vorlauf_soll - abweichung * 2.0
+            weight = 2.0
 
-        # Trend-Anpassung: Bei starken Trends weniger streng bewerten
-        # Wenn Außentemp gefallen ist und Raum zu kalt → War teilweise zu erwarten
-        if aussen_trend < -0.5 and abweichung < -0.5:
-            reward = max(reward, -0.3)  # Nicht zu negativ bewerten
-            _LOGGER.debug(
-                "Trend-Anpassung: Außentemp fiel (%.2f), Raum zu kalt war teilweise erwartbar",
-                aussen_trend,
-            )
-
-        # Wenn Außentemp gestiegen ist und Raum zu warm → War teilweise zu erwarten
-        if aussen_trend > 0.5 and abweichung > 0.5:
-            reward = max(reward, -0.3)  # Nicht zu negativ bewerten
-            _LOGGER.debug(
-                "Trend-Anpassung: Außentemp stieg (%.2f), Raum zu warm war teilweise erwartbar",
-                aussen_trend,
-            )
-
-        # Korrektur berechnen (nur bei schlechtem Ergebnis)
-        if reward < 0:
-            if abweichung < 0:  # Zu kalt → Vorlauf war zu niedrig
-                # Berechne Korrektur: pro 0.5°C Abweichung +2°C Vorlauf
-                korrektur = abs(abweichung) * 4.0
-                korrigierter_vorlauf_soll = vorlauf_soll + korrektur
-            else:  # Zu warm → Vorlauf war zu hoch
-                # Berechne Korrektur: pro 0.5°C Abweichung -1.5°C Vorlauf
-                # (Weniger aggressiv, da Überhitzung träger reagiert)
-                korrektur = abs(abweichung) * 3.0
-                korrigierter_vorlauf_soll = vorlauf_soll - korrektur
-        else:
-            korrigierter_vorlauf_soll = vorlauf_soll
-
-        return reward, korrigierter_vorlauf_soll
+        return VorlaufSollWeight(vorlauf_soll=korrigierter_vorlauf, weight=weight)
 
     def lerne_aus_history(
         self,
-        historical_states: list[dict[str, Any]],
+        historical_state: dict[str, Any],
         current_raum_ist: float,
-        current_time: datetime,
-    ) -> dict[str, int]:
-        """Lernt aus historischen HA-Sensor-Werten.
+    ) -> bool:
+        """Lernt aus einem historischen HA-Sensor-Zustand."""
 
-        Args:
-            historical_states: Liste von historischen Sensor-Zuständen (2-6h alt)
-                Format: [{
-                    'timestamp': datetime,
-                    'aussen_temp': float,
-                    'raum_ist': float,
-                    'raum_soll': float,
-                    'vorlauf_ist': float,
-                    'vorlauf_soll': float,  # Damals berechneter Soll-Wert
-                }, ...]
-            current_raum_ist: Aktuelle Raumtemperatur (für Reward-Bewertung)
-            current_time: Aktuelle Zeit (timezone-aware)
+        try:
+            # Extrahiere Sensor-Werte vom damaligen Zeitpunkt
+            timestamp = historical_state['timestamp']
+            aussen_temp = historical_state['aussen_temp']
+            raum_ist = historical_state['raum_ist']
+            raum_soll = historical_state['raum_soll']
+            vorlauf_ist = historical_state['vorlauf_ist']
+            vorlauf_soll = historical_state['vorlauf_soll']
 
-        Returns:
-            Statistiken über das Lernen (gelernt_positiv, gelernt_negativ)
-        """
+            # Rekonstruiere Features vom damaligen Zeitpunkt
+            raum_abweichung = raum_soll - raum_ist
+            stunde = timestamp.hour + timestamp.minute / 60.0
+            stunde_sin = math.sin(2 * math.pi * stunde / 24)
+            stunde_cos = math.cos(2 * math.pi * stunde / 24)
+            wochentag = timestamp.weekday()
+            wochentag_sin = math.sin(2 * math.pi * wochentag / 7)
+            wochentag_cos = math.cos(2 * math.pi * wochentag / 7)
 
-        _LOGGER.info("_lerne_aus_history() mit %d historischen Zuständen", len(historical_states))
-
-        stats = {"gelernt_positiv": 0, "gelernt_negativ": 0}
-
-        if not historical_states:
-            return stats
-
-        # Aktuellen Trend für Bewertung holen
-        trends = self._berechne_trends()
-        aussen_trend = trends.aussen_trend_1h
-
-        for state in historical_states:
-            try:
-                # Extrahiere Sensor-Werte
-                timestamp = state['timestamp']
-                aussen_temp = state['aussen_temp']
-                raum_ist_damals = state['raum_ist']
-                raum_soll = state['raum_soll']
-                vorlauf_ist = state['vorlauf_ist']
-                vorlauf_soll_damals = state['vorlauf_soll']
-
-                # Rekonstruiere Features vom damaligen Zeitpunkt
-                # (vereinfachte Version ohne komplette Historie)
-                raum_abweichung = raum_soll - raum_ist_damals
-                stunde = timestamp.hour + timestamp.minute / 60.0
-                stunde_sin = math.sin(2 * math.pi * stunde / 24)
-                stunde_cos = math.cos(2 * math.pi * stunde / 24)
-                wochentag = timestamp.weekday()
-                wochentag_sin = math.sin(2 * math.pi * wochentag / 7)
-                wochentag_cos = math.cos(2 * math.pi * wochentag / 7)
-
-                features = Features(
-                    aussen_temp=aussen_temp,
-                    raum_ist=raum_ist_damals,
-                    raum_soll=raum_soll,
-                    vorlauf_ist=vorlauf_ist,
-                    raum_abweichung=raum_abweichung,
-                    # Trends können wir nicht rekonstruieren - setze auf 0
-                    aussen_trend_1h=0.0,
-                    aussen_trend_2h=0.0,
-                    aussen_trend_3h=0.0,
-                    aussen_trend_6h=0.0,
-                    stunde_sin=stunde_sin,
-                    stunde_cos=stunde_cos,
-                    wochentag_sin=wochentag_sin,
-                    wochentag_cos=wochentag_cos,
-                    temp_diff=aussen_temp - raum_ist_damals,
-                    vorlauf_raum_diff=vorlauf_ist - raum_ist_damals,
-                )
-
-                # Erstelle Erfahrung für Bewertung
-                erfahrung = Erfahrung(
-                    timestamp=timestamp,
-                    features=features,
-                    vorlauf_soll=vorlauf_soll_damals,
-                    raum_ist_vorher=raum_ist_damals,
-                    raum_soll=raum_soll,
-                    gelernt=False,
-                )
-
-                # Bewerte die Erfahrung
-                reward, korrigierter_vorlauf = self._bewerte_erfahrung(
-                    erfahrung, current_raum_ist, aussen_trend
-                )
-
-                if reward >= 0:
-                    # Gute Erfahrung: Lerne mit original Vorlauf
-                    sample_weight = 1.0 + reward  # 1.0 bis 2.0
-                    self.model.learn_one(
-                        features.to_dict(),
-                        vorlauf_soll_damals,
-                        sample_weight=sample_weight,
-                    )
-                    stats["gelernt_positiv"] += 1
-
-                    _LOGGER.info(
-                        "✓ History-Lernen (Reward=%.1f, Weight=%.1f): Vorlauf %.1f°C war gut (von %s)",
-                        reward,
-                        sample_weight,
-                        vorlauf_soll_damals,
-                        timestamp.strftime("%H:%M"),
-                    )
-                else:
-                    # Schlechte Erfahrung: Lerne mit korrigiertem Vorlauf
-                    sample_weight = abs(reward) * 1.5  # 0.75 bis 1.5
-                    self.model.learn_one(
-                        features.to_dict(), korrigierter_vorlauf, sample_weight=sample_weight
-                    )
-                    stats["gelernt_negativ"] += 1
-
-                    _LOGGER.warning(
-                        "✗ History-Lernen (Reward=%.1f, Weight=%.1f): Vorlauf %.1f°C → besser %.1f°C (von %s)",
-                        reward,
-                        sample_weight,
-                        vorlauf_soll_damals,
-                        korrigierter_vorlauf,
-                        timestamp.strftime("%H:%M"),
-                    )
-
-            except Exception as e:
-                _LOGGER.error("Fehler beim History-Learning für State %s: %s", state.get('timestamp'), e)
-
-        if stats["gelernt_positiv"] + stats["gelernt_negativ"] > 0:
-            _LOGGER.info(
-                "History-Lernen abgeschlossen: %d positiv, %d negativ (von %d States)",
-                stats["gelernt_positiv"],
-                stats["gelernt_negativ"],
-                len(historical_states),
+            features = Features(
+                aussen_temp=aussen_temp,
+                raum_ist=raum_ist,
+                raum_soll=raum_soll,
+                vorlauf_ist=vorlauf_ist,
+                raum_abweichung=raum_abweichung,
+                # Trends können wir nicht rekonstruieren - setze auf 0
+                aussen_trend_1h=0.0,
+                aussen_trend_2h=0.0,
+                aussen_trend_3h=0.0,
+                aussen_trend_6h=0.0,
+                stunde_sin=stunde_sin,
+                stunde_cos=stunde_cos,
+                wochentag_sin=wochentag_sin,
+                wochentag_cos=wochentag_cos,
+                # Interaktions-Features | werden durch Gewichtungen im Model berücksichtigt
+                temp_diff=aussen_temp - raum_ist,   # Model muss lernen: "5°C draußen UND 22°C drin → Differenz = -17°C"
+                vorlauf_raum_diff=vorlauf_ist - raum_ist,   # Wie viel wärmer ist Vorlauf?
             )
-            self.letztes_lern_timestamp = current_time
 
-        return stats
+            # Erstelle Erfahrung für Bewertung
+            erfahrung = Erfahrung(
+                timestamp=timestamp,
+                features=features,
+                vorlauf_soll=vorlauf_soll,
+                raum_ist_vorher=raum_ist,
+                raum_soll=raum_soll,
+                gelernt=False,
+            )
+
+            # Bewerte mit Raum-Ist von 2-6h SPÄTER
+            korrigierter_vorlauf_weight = self._bewerte_erfahrung(
+                erfahrung=erfahrung, raum_ist_jetzt=current_raum_ist
+            )
+
+            self.model.learn_one(
+                features.to_dict(),
+                korrigierter_vorlauf_weight.vorlauf_soll,
+                sample_weight=korrigierter_vorlauf_weight.weight,
+            )
+
+        except Exception as e:
+            _LOGGER.error("Fehler beim History-Learning: %s", e)
+            return False
+
+        else:
+            _LOGGER.info("Lernen aus History erfolgreich")
+            return True
 
     def berechne_vorlauf_soll(
         self,
@@ -476,9 +323,6 @@ class FlowController:
         """
 
         _LOGGER.info("berechne_vorlauf_soll()")
-
-        # Backwards compatibility: Stelle sicher, dass alle Attribute existieren
-        self._ensure_attributes()
 
         # Flag um zu tracken ob Model in dieser Berechnung zurückgesetzt wurde
         model_was_reset = False
