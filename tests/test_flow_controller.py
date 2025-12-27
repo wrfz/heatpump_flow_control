@@ -4,10 +4,12 @@ from datetime import datetime, timedelta
 from unittest.mock import patch
 
 from custom_components.heatpump_flow_control.flow_controller import (
+    DateTimeTemperatur,
     Erfahrung,
     ErfahrungsSpeicher,
     Features,
     FlowController,
+    HistoryBuffer,
     SensorValues,
 )
 
@@ -29,13 +31,13 @@ class TestErfahrungsSpeicher:
         features = Features(aussen_temp = 5.0, raum_ist = 22.0)
         speicher.speichere_erfahrung(
             features=features,
-            vorlauf_gesetzt=35.0,
+            vorlauf_soll=35.0,
             raum_ist_vorher=22.0,
             raum_soll=21.0,
         )
 
         assert len(speicher.erfahrungen) == 1
-        assert speicher.erfahrungen[0].vorlauf_gesetzt == 35.0
+        assert speicher.erfahrungen[0].vorlauf_soll == 35.0
         assert speicher.erfahrungen[0].gelernt is False
         assert speicher.erfahrungen[0].timestamp is not None
 
@@ -47,14 +49,14 @@ class TestErfahrungsSpeicher:
         for i in range(5):
             speicher.speichere_erfahrung(
                 features=features,
-                vorlauf_gesetzt=30.0 + i,
+                vorlauf_soll=30.0 + i,
                 raum_ist_vorher=22.0,
                 raum_soll=21.0,
             )
 
         # Should only keep last 3
         assert len(speicher.erfahrungen) == 3
-        assert speicher.erfahrungen[0].vorlauf_gesetzt == 32.0  # 2nd experience
+        assert speicher.erfahrungen[0].vorlauf_soll == 32.0  # 2nd experience
 
     def test_get_lernbare_erfahrungen(self):
         """Test retrieving learnable experiences."""
@@ -71,7 +73,7 @@ class TestErfahrungsSpeicher:
             mock_dt.now.return_value = now - timedelta(hours=1)
             speicher.speichere_erfahrung(
                 features=features,
-                vorlauf_gesetzt=30.0,
+                vorlauf_soll=30.0,
                 raum_ist_vorher=22.0,
                 raum_soll=21.0,
             )
@@ -83,7 +85,7 @@ class TestErfahrungsSpeicher:
             mock_dt.now.return_value = now - timedelta(hours=3)
             speicher.speichere_erfahrung(
                 features=features,
-                vorlauf_gesetzt=35.0,
+                vorlauf_soll=35.0,
                 raum_ist_vorher=22.0,
                 raum_soll=21.0,
             )
@@ -95,7 +97,7 @@ class TestErfahrungsSpeicher:
             mock_dt.now.return_value = now - timedelta(hours=7)
             speicher.speichere_erfahrung(
                 features=features,
-                vorlauf_gesetzt=40.0,
+                vorlauf_soll=40.0,
                 raum_ist_vorher=22.0,
                 raum_soll=21.0,
             )
@@ -109,7 +111,7 @@ class TestErfahrungsSpeicher:
 
         # Only the 3-hour old experience should be learnable
         assert len(lernbar) == 1
-        assert lernbar[0].vorlauf_gesetzt == 35.0
+        assert lernbar[0].vorlauf_soll == 35.0
 
     def test_markiere_gelernt(self):
         """Test marking experience as learned."""
@@ -118,7 +120,7 @@ class TestErfahrungsSpeicher:
 
         speicher.speichere_erfahrung(
             features=features,
-            vorlauf_gesetzt=30.0,
+            vorlauf_soll=30.0,
             raum_ist_vorher=22.0,
             raum_soll=21.0,
         )
@@ -138,7 +140,7 @@ class TestErfahrungsSpeicher:
         for i in range(3):
             speicher.speichere_erfahrung(
                 features=features,
-                vorlauf_gesetzt=30.0 + i,
+                vorlauf_soll=30.0 + i,
                 raum_ist_vorher=22.0,
                 raum_soll=21.0,
             )
@@ -236,12 +238,12 @@ class TestFlowControllerInit:
         assert controller.predictions_count == 0, (
             "Predictions zähler muss zurückgesetzt sein"
         )
-        delattr(controller, "reward_learning_enabled")
+        #delattr(controller, "reward_learning_enabled")
 
         # Should not crash and re-initialize
         controller._ensure_attributes()
 
-        assert hasattr(controller, "reward_learning_enabled")
+        #assert hasattr(controller, "reward_learning_enabled")
 
 
 class TestFeatureCreation:
@@ -290,12 +292,11 @@ class TestFeatureCreation:
         )
 
         # Add some history
-        controller.aussen_temp_history = [3.0, 4.0, 5.0]
-        controller.timestamps = [
-            datetime.now() - timedelta(hours=2),
-            datetime.now() - timedelta(hours=1),
-            datetime.now(),
-        ]
+        controller.aussen_temp_history = HistoryBuffer([
+            DateTimeTemperatur(timestamp=datetime.now() - timedelta(hours=2), temperature=3.0),
+            DateTimeTemperatur(timestamp=datetime.now() - timedelta(hours=1), temperature=4.0),
+            DateTimeTemperatur(timestamp=datetime.now(), temperature=5.0)
+        ])
 
         features = controller._erstelle_features(
             SensorValues(
@@ -308,8 +309,10 @@ class TestFeatureCreation:
 
         # Trends should be calculated (may be 0 with insufficient data)
         # Just check they exist
-        assert features.aussen_trend is not None
-        assert features.aussen_trend_kurz is not None
+        assert features.aussen_trend_1h is not None
+        assert features.aussen_trend_2h is not None
+        assert features.aussen_trend_3h is not None
+        assert features.aussen_trend_6h is not None
 
 class TestPrediction:
     """Test prediction logic."""
@@ -513,12 +516,12 @@ class TestLearning:
             features=Features(raum_abweichung=-1.0),
             raum_ist_vorher=21.0,
             raum_soll=22.0,
-            vorlauf_gesetzt=38.0,
+            vorlauf_soll=38.0,
         )
 
         reward, y_target = controller._bewerte_erfahrung(
             erfahrung=erfahrung,
-            raum_ist_jetzt=21.5,  # Improved
+            raum_ist=21.5,  # Improved
             aussen_trend=0.0,
         )
 
@@ -540,12 +543,12 @@ class TestLearning:
             features=Features(raum_abweichung=0.0),
             raum_ist_vorher=22.0,
             raum_soll=22.0,
-            vorlauf_gesetzt=40.0,  # Too high
+            vorlauf_soll=40.0,  # Too high
         )
 
         reward, y_target = controller._bewerte_erfahrung(
             erfahrung=erfahrung,
-            raum_ist_jetzt=23.0,  # Worse
+            raum_ist=23.0,  # Worse
             aussen_trend=0.0,
         )
 
@@ -560,7 +563,7 @@ class TestLearning:
             learning_rate=0.01,
             trend_history_size=12
         )
-        controller.reward_learning_enabled = True
+        #controller.reward_learning_enabled = True
 
         # Add an old experience manually
         now = datetime.now()
@@ -572,7 +575,7 @@ class TestLearning:
         )
         controller.erfahrungs_speicher.speichere_erfahrung(
             features=features,
-            vorlauf_gesetzt=35.0,
+            vorlauf_soll=35.0,
             raum_ist_vorher=21.0,
             raum_soll=22.0,
         )
@@ -581,10 +584,10 @@ class TestLearning:
         controller.erfahrungs_speicher.erfahrungen[0].timestamp = old_time
 
         # Add current data to longterm history
-        controller.raum_temp_longterm = [(now, 21.5)]
+        #controller.raum_temp_longterm = [(now, 21.5)]
 
         # Perform reward learning
-        stats = controller._lerne_aus_erfahrungen(raum_ist_jetzt=21.5)
+        stats = controller._lerne_aus_erfahrungen(raum_ist=21.5)
 
         # Should have attempted learning (check stats exist)
         assert isinstance(stats, dict)
@@ -607,7 +610,7 @@ class TestRealisticLearningScenario:
             trend_history_size=12
         )
         controller.min_predictions_for_model = 5  # Schnell aus Fallback raus
-        controller.reward_learning_enabled = False  # Klassisches Lernen
+        #controller.reward_learning_enabled = False  # Klassisches Lernen
 
         raum_soll = 21.0
         vorlauf_predictions = []
@@ -687,7 +690,7 @@ class TestModelStats:
         for i in range(5):
             controller.erfahrungs_speicher.speichere_erfahrung(
                 features=features,
-                vorlauf_gesetzt=35.0,
+                vorlauf_soll=35.0,
                 raum_ist_vorher=22.0,
                 raum_soll=21.0,
             )
@@ -847,7 +850,7 @@ class TestFlowCalculation:
             trend_history_size=12
         )
         flow_controller.min_predictions_for_model = 5  # Schnell aus Fallback raus
-        flow_controller.reward_learning_enabled = False  # Klassisches Lernen
+        #flow_controller.reward_learning_enabled = False  # Klassisches Lernen
 
         # Fluent test: Realistische Simulation mit zeitversetzter Reaktion
         # wait(60) setzt das Interval für alle folgenden expect_vorlauf_soll() Aufrufe
@@ -913,7 +916,7 @@ class TestFlowCalculation:
         )
 
         flow_controller.min_predictions_for_model = 5  # Schnell aus Fallback raus
-        flow_controller.reward_learning_enabled = False  # Klassisches Lernen
+        #flow_controller.reward_learning_enabled = False  # Klassisches Lernen
 
         (
             controller(flow_controller).tolerance(0.1).wait(60)

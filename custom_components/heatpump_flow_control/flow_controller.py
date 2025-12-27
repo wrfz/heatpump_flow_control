@@ -1,15 +1,17 @@
 """Machine Learning Controller für Wärmepumpen-Regelung."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 import math
+import statistics
 
 from river import compose, linear_model, metrics, optim, preprocessing
 
 from .types import (
+    DateTimeTemperatur,
     Erfahrung,
     Features,
-    LongtermFeatures,
+    HistoryBuffer,
     ModelStats,
     SensorValues,
     Trends,
@@ -32,7 +34,7 @@ class ErfahrungsSpeicher:
     def speichere_erfahrung(
         self,
         features: Features,
-        vorlauf_gesetzt: float,
+        vorlauf_soll: float,
         raum_ist_vorher: float,
         raum_soll: float,
     ) -> None:
@@ -50,7 +52,7 @@ class ErfahrungsSpeicher:
         erfahrung = Erfahrung(
             timestamp = datetime.now(),
             features = features.copy(),
-            vorlauf_gesetzt = vorlauf_gesetzt,
+            vorlauf_soll = vorlauf_soll,
             raum_ist_vorher = raum_ist_vorher,
             raum_soll = raum_soll,
             gelernt = False,
@@ -125,7 +127,6 @@ class FlowController:
         self.predictions_count = 0
 
         self.erfahrungs_speicher = ErfahrungsSpeicher(max_size=200)
-        self.reward_learning_enabled = True  # Kann deaktiviert werden für Tests
         self.min_reward_hours = 2.0  # Mindeststunden bis Bewertung
         self.max_reward_hours = 6.0  # Maximalstunden bis Bewertung
 
@@ -151,15 +152,15 @@ class FlowController:
             linear_model.LinearRegression(optimizer=optim.SGD(self.learning_rate)),
         )
 
-        # Historie für Trend-Berechnung (kurz)
-        self.aussen_temp_history = []
-        self.timestamps = []
+        # ZEITBASIERTE Historie für Trend-Berechnung
+        self.aussen_temp_history = HistoryBuffer()  # Kurze Historie für Trends (letzte 2-3 Stunden)
+        self.short_history_hours = 3.0  # Kurze Historie: 3 Stunden
 
-        # ERWEITERT: Langzeit-Historie (24 Stunden bei stündlichen Updates = 24 Werte)
-        self.longterm_history_size = 24 * 7  # 1 Woche
-        self.aussen_temp_longterm = []  # Speichert (timestamp, temp) Tupel
-        self.vorlauf_longterm = []  # Speichert (timestamp, vorlauf) Tupel
-        self.raum_temp_longterm = []  # Speichert (timestamp, raum_temp) Tupel
+        # Langzeit-Historie (1 Woche)
+        self.longterm_history_days = 7
+        self.aussen_temp_longterm = HistoryBuffer()  # Speichert (timestamp, temp) Tupel
+        self.vorlauf_longterm = HistoryBuffer()  # Speichert (timestamp, vorlauf) Tupel
+        self.raum_temp_longterm = HistoryBuffer()  # Speichert (timestamp, raum_temp) Tupel
 
         # Metriken
         self.metric = metrics.MAE()
@@ -185,13 +186,11 @@ class FlowController:
         self._ensure_attributes()
 
         _LOGGER.info(
-            "_setup(): min=%s, max=%s, lr=%s, history=%s, longterm=%s, reward_learning=%s",
+            "_setup(): min=%s, max=%s, lr=%s, history=%s",
             self.min_vorlauf,
             self.max_vorlauf,
             self.learning_rate,
             self.trend_history_size,
-            self.longterm_history_size,
-            self.reward_learning_enabled,
         )
 
     def _ensure_attributes(self) -> None:
@@ -201,8 +200,6 @@ class FlowController:
         """
         if not hasattr(self, "erfahrungs_speicher"):
             self.erfahrungs_speicher = ErfahrungsSpeicher(max_size=200)
-        if not hasattr(self, "reward_learning_enabled"):
-            self.reward_learning_enabled = True
         if not hasattr(self, "min_reward_hours"):
             self.min_reward_hours = 2.0
         if not hasattr(self, "max_reward_hours"):
@@ -236,38 +233,19 @@ class FlowController:
         return vorlauf
 
     def _berechne_trends(self) -> Trends:
-        """Berechnet Temperatur-Trends aus Historie."""
+        """Berechnet zeitnormierte Temperatur-Trends in °C/Stunde.
+
+        Returns:
+            Trends mit °C/Stunde normalisierten Werten
+        """
 
         _LOGGER.info("_berechne_trends()")
 
-        if len(self.aussen_temp_history) < 2:
-            return Trends(
-                aussen_trend=0.0,
-                aussen_trend_kurz=0.0,
-                aussen_trend_mittel=0.0,
-            )
-
-        # Kurzfristiger Trend (letzte 2 Messungen)
-        trend_kurz = self.aussen_temp_history[-1] - self.aussen_temp_history[-2]
-
-        # Mittelfristiger Trend (letzte N/2 Messungen)
-        mittel_idx = max(1, len(self.aussen_temp_history) // 2)
-        if len(self.aussen_temp_history) >= mittel_idx + 1:
-            trend_mittel = (
-                self.aussen_temp_history[-1] - self.aussen_temp_history[-mittel_idx]
-            ) / mittel_idx
-        else:
-            trend_mittel = 0.0
-
-        # Langfristiger Trend (über gesamte Historie)
-        trend_lang = (self.aussen_temp_history[-1] - self.aussen_temp_history[0]) / len(
-            self.aussen_temp_history
-        )
-
         return Trends(
-            aussen_trend=trend_lang,
-            aussen_trend_kurz=trend_kurz,
-            aussen_trend_mittel=trend_mittel,
+            aussen_trend_1h=self.aussen_temp_history.get_trend(hours=1.0),
+            aussen_trend_2h=self.aussen_temp_history.get_trend(hours=2.0),
+            aussen_trend_3h=self.aussen_temp_history.get_trend(hours=3.0),
+            aussen_trend_6h=self.aussen_temp_history.get_trend(hours=6.0),
         )
 
     def _erstelle_features(
@@ -287,31 +265,37 @@ class FlowController:
 
         now = datetime.now()
 
-        # Temperatur-Historie aktualisieren (kurzfristig)
-        self.aussen_temp_history.append(sensor_values.aussen_temp)
-        self.timestamps.append(now)
+        self.aussen_temp_history.append(DateTimeTemperatur(timestamp=now, temperature=sensor_values.aussen_temp))
 
-        if len(self.aussen_temp_history) > self.trend_history_size:
-            self.aussen_temp_history.pop(0)
-            self.timestamps.pop(0)
+        # Entferne Einträge die älter als short_history_hours sind
+        cutoff_time = now - timedelta(hours=self.short_history_hours)
 
-        # ERWEITERT: Langzeit-Historie aktualisieren (stündlich)
-        # Nur hinzufügen wenn > 30 Min seit letztem Eintrag
+        while self.aussen_temp_history and self.aussen_temp_history.first.timestamp < cutoff_time:
+            self.aussen_temp_history.popleft()
+
+        # Langzeit-Historie aktualisieren (nur alle 30 Min)
+        # Entferne alte Einträge basierend auf Tagen statt fester Anzahl
+        cutoff_longterm = now - timedelta(days=self.longterm_history_days)
+
         if (
             not self.aussen_temp_longterm
-            or (now - self.aussen_temp_longterm[-1][0]).total_seconds() > 1800
+            or (now - self.aussen_temp_longterm[-1].timestamp).total_seconds() > 1800
         ):
-            self.aussen_temp_longterm.append((now, sensor_values.aussen_temp))
-            self.vorlauf_longterm.append((now, sensor_values.vorlauf_ist))
-            self.raum_temp_longterm.append((now, sensor_values.raum_ist))
+            self.aussen_temp_longterm.append(DateTimeTemperatur(timestamp=now, temperature=sensor_values.aussen_temp))
+            self.vorlauf_longterm.append(DateTimeTemperatur(timestamp=now, temperature=sensor_values.vorlauf_ist))
+            self.raum_temp_longterm.append(DateTimeTemperatur(timestamp=now, temperature=sensor_values.raum_ist))
 
-            # Begrenze auf longterm_history_size
-            if len(self.aussen_temp_longterm) > self.longterm_history_size:
-                self.aussen_temp_longterm.pop(0)
-                self.vorlauf_longterm.pop(0)
-                self.raum_temp_longterm.pop(0)
+            histories = [
+                self.aussen_temp_longterm,
+                self.vorlauf_longterm,
+                self.raum_temp_longterm
+            ]
 
-        # Trends berechnen
+            # Entferne alte Einträge basierend auf Zeit
+            for history in histories:
+                while history and history[0].timestamp < cutoff_longterm:
+                    history.popleft()
+
         trends = self._berechne_trends()
 
         # Raum-Abweichung
@@ -327,18 +311,16 @@ class FlowController:
         wochentag_sin = math.sin(2 * math.pi * wochentag / 7)
         wochentag_cos = math.cos(2 * math.pi * wochentag / 7)
 
-        # ERWEITERT: Langzeit-Features berechnen
-        longterm_features = self._berechne_longterm_features(now, stunde)
-
-        features = Features(
+        return Features(
             aussen_temp = sensor_values.aussen_temp,
             raum_ist = sensor_values.raum_ist,
             raum_soll = sensor_values.raum_soll,
             vorlauf_ist = sensor_values.vorlauf_ist,
             raum_abweichung = raum_abweichung,
-            aussen_trend = trends.aussen_trend,
-            aussen_trend_kurz = trends.aussen_trend_kurz,
-            aussen_trend_mittel = trends.aussen_trend_mittel,
+            aussen_trend_1h=trends.aussen_trend_1h,
+            aussen_trend_2h=trends.aussen_trend_2h,
+            aussen_trend_3h=trends.aussen_trend_3h,
+            aussen_trend_6h=trends.aussen_trend_6h,
             stunde_sin = stunde_sin,
             stunde_cos = stunde_cos,
             wochentag_sin = wochentag_sin,
@@ -348,83 +330,10 @@ class FlowController:
             vorlauf_raum_diff = sensor_values.vorlauf_ist - sensor_values.raum_ist,
         )
 
-        # Langzeit-Features hinzufügen
-        features.set_long_term_features(longterm_features)
-
-        return features
-
-    def _berechne_longterm_features(
-        self, now: datetime, current_hour: float
-    ) -> LongtermFeatures:
-        """Berechnet Langzeit-Features aus der Historie.
-
-        Returns:
-            Dictionary mit Langzeit-Features
-        """
-
-        _LOGGER.info("_berechne_longterm_features()")
-
-        features = LongtermFeatures(
-            temp_24h_ago = 0.0,
-            temp_24h_avg = 0.0,
-            temp_7d_avg = 0.0,
-            temp_same_hour_avg = 0.0,
-            vorlauf_same_hour_avg = 0.0,
-        )
-
-        if len(self.aussen_temp_longterm) < 2:
-            return features
-
-        # Durchschnittstemperatur letzte 24h
-        temps_24h = [
-            temp
-            for ts, temp in self.aussen_temp_longterm
-            if (now - ts).total_seconds() < 86400
-        ]
-        if temps_24h:
-            features.temp_24h_avg = sum(temps_24h) / len(temps_24h)
-
-        # Durchschnittstemperatur letzte 7 Tage
-        if self.aussen_temp_longterm:
-            all_temps = [temp for _, temp in self.aussen_temp_longterm]
-            features.temp_7d_avg = sum(all_temps) / len(all_temps)
-
-        # Temperatur vor 24 Stunden (± 2 Stunden Toleranz)
-        for ts, temp in reversed(self.aussen_temp_longterm):
-            hours_ago = (now - ts).total_seconds() / 3600
-            if 22 <= hours_ago <= 26:  # 24h ± 2h
-                features.temp_24h_ago = temp
-                break
-
-        # Durchschnitt zur gleichen Tageszeit (± 1 Stunde)
-        same_hour_temps = []
-        same_hour_vorlauf = []
-
-        for i, (ts, temp) in enumerate(self.aussen_temp_longterm):
-            ts_hour = ts.hour + ts.minute / 60.0
-            hour_diff = abs(ts_hour - current_hour)
-            # Berücksichtige Wrap-around (23h und 0h sind nah)
-            if hour_diff > 12:
-                hour_diff = 24 - hour_diff
-
-            if hour_diff <= 1.5:  # ± 1.5 Stunden
-                same_hour_temps.append(temp)
-                if i < len(self.vorlauf_longterm):
-                    same_hour_vorlauf.append(self.vorlauf_longterm[i][1])
-
-        if same_hour_temps:
-            features.temp_same_hour_avg = sum(same_hour_temps) / len(same_hour_temps)
-        if same_hour_vorlauf:
-            features.vorlauf_same_hour_avg = sum(same_hour_vorlauf) / len(
-                same_hour_vorlauf
-            )
-
-        return features
-
     def _bewerte_erfahrung(
         self,
         erfahrung: Erfahrung,
-        raum_ist_jetzt: float,
+        raum_ist: float,
         aussen_trend: float = 0.0,
     ) -> tuple[float, float]:
         """Bewertet eine Erfahrung basierend auf dem Ergebnis.
@@ -443,10 +352,10 @@ class FlowController:
         _LOGGER.info("_bewerte_erfahrung()")
 
         raum_soll = erfahrung.raum_soll
-        vorlauf_gesetzt = erfahrung.vorlauf_gesetzt
+        vorlauf_soll = erfahrung.vorlauf_soll
 
         # Wie groß ist die Abweichung jetzt (2-3h später)?
-        abweichung = raum_ist_jetzt - raum_soll
+        abweichung = raum_ist - raum_soll
         abs_abweichung = abs(abweichung)
 
         # Bewertung berechnen
@@ -483,18 +392,18 @@ class FlowController:
             if abweichung < 0:  # Zu kalt → Vorlauf war zu niedrig
                 # Berechne Korrektur: pro 0.5°C Abweichung +2°C Vorlauf
                 korrektur = abs(abweichung) * 4.0
-                korrigierter_vorlauf = vorlauf_gesetzt + korrektur
+                korrigierter_vorlauf_soll = vorlauf_soll + korrektur
             else:  # Zu warm → Vorlauf war zu hoch
                 # Berechne Korrektur: pro 0.5°C Abweichung -1.5°C Vorlauf
                 # (Weniger aggressiv, da Überhitzung träger reagiert)
                 korrektur = abs(abweichung) * 3.0
-                korrigierter_vorlauf = vorlauf_gesetzt - korrektur
+                korrigierter_vorlauf_soll = vorlauf_soll - korrektur
         else:
-            korrigierter_vorlauf = vorlauf_gesetzt
+            korrigierter_vorlauf_soll = vorlauf_soll
 
-        return reward, korrigierter_vorlauf
+        return reward, korrigierter_vorlauf_soll
 
-    def _lerne_aus_erfahrungen(self, raum_ist_jetzt: float) -> dict[str, int]:
+    def _lerne_aus_erfahrungen(self, raum_ist: float) -> dict[str, int]:
         """Lernt aus allen verfügbaren Erfahrungen.
 
         Args:
@@ -506,9 +415,6 @@ class FlowController:
 
         _LOGGER.info("_lerne_aus_erfahrungen()")
 
-        if not self.reward_learning_enabled:
-            return {"gelernt_positiv": 0, "gelernt_negativ": 0}
-
         lernbare = self.erfahrungs_speicher.get_lernbare_erfahrungen(
             min_stunden=self.min_reward_hours, max_stunden=self.max_reward_hours
         )
@@ -517,12 +423,12 @@ class FlowController:
 
         # Aktuellen Trend für Bewertung holen
         trends = self._berechne_trends()
-        aussen_trend = trends.aussen_trend
+        aussen_trend = trends.aussen_trend_1h
 
         for erfahrung in lernbare:
             # Bewerte die Erfahrung
             reward, korrigierter_vorlauf = self._bewerte_erfahrung(
-                erfahrung, raum_ist_jetzt, aussen_trend
+                erfahrung, raum_ist, aussen_trend
             )
 
             features: Features = erfahrung.features
@@ -534,7 +440,7 @@ class FlowController:
                     sample_weight = 1.0 + reward  # 1.0 bis 2.0
                     self.model.learn_one(
                         features.to_dict(),
-                        erfahrung.vorlauf_gesetzt,
+                        erfahrung.vorlauf_soll,
                         sample_weight=sample_weight,
                     )
 
@@ -544,7 +450,7 @@ class FlowController:
                         "✓ Reward-Lernen (Reward=%.1f, Weight=%.1f): Vorlauf %.1f°C war gut",
                         reward,
                         sample_weight,
-                        erfahrung.vorlauf_gesetzt,
+                        erfahrung.vorlauf_soll,
                     )
                 else:
                     # Schlechte Erfahrung: Lerne mit korrigiertem Vorlauf
@@ -559,7 +465,7 @@ class FlowController:
                         "✗ Reward-Lernen (Reward=%.1f, Weight=%.1f): Vorlauf %.1f°C → besser %.1f°C",
                         reward,
                         sample_weight,
-                        erfahrung.vorlauf_gesetzt,
+                        erfahrung.vorlauf_soll,
                         korrigierter_vorlauf,
                     )
 
@@ -666,29 +572,31 @@ class FlowController:
         if not model_was_reset:
             self.predictions_count += 1
 
-        # NEU: Speichere diese Entscheidung für späteres Reward-Learning
-        if self.reward_learning_enabled:
-            self.erfahrungs_speicher.speichere_erfahrung(
-                features=features,
-                vorlauf_gesetzt=vorlauf_soll,
-                raum_ist_vorher=sensor_values.raum_ist,
-                raum_soll=sensor_values.raum_soll,
-            )
+        # Speichere diese Entscheidung für späteres Reward-Learning
+        self.erfahrungs_speicher.speichere_erfahrung(
+            features=features,
+            vorlauf_soll=vorlauf_soll,
+            raum_ist_vorher=sensor_values.raum_ist,
+            raum_soll=sensor_values.raum_soll,
+        )
 
-        # NEU: Lerne aus alten Erfahrungen (2-6h alt)
-        if self.reward_learning_enabled and self.predictions_count % 2 == 0:
+        # Lerne aus alten Erfahrungen (2-6h alt)
+        if self.predictions_count % 2 == 0:
             # Nur jedes 2. Mal ausführen um Performance zu schonen
-            lern_stats = self._lerne_aus_erfahrungen(raum_ist_jetzt=sensor_values.raum_ist)
+            lern_stats = self._lerne_aus_erfahrungen(raum_ist=sensor_values.raum_ist)
             if lern_stats["gelernt_positiv"] + lern_stats["gelernt_negativ"] > 0:
                 _LOGGER.debug("Reward-Learning Stats: %s", lern_stats)
 
         _LOGGER.info(
-            "Vorlauf-Soll berechnet: %.1f°C (Außen: %.1f°C, Raum: %.1f/%.1f°C, Trend: %.2f)",
+            "Vorlauf-Soll berechnet: %.1f°C (Außen: %.1f°C, Raum: %.1f/%.1f°C, Trend: [1h: %.2f, 2h: %.2f, 3h: %.2f, 6h: %.2f])",
             vorlauf_soll,
             sensor_values.aussen_temp,
             sensor_values.raum_ist,
             sensor_values.raum_soll,
-            features.aussen_trend,
+            features.aussen_trend_1h,
+            features.aussen_trend_2h,
+            features.aussen_trend_3h,
+            features.aussen_trend_6h,
         )
 
         _LOGGER.info(
@@ -711,7 +619,6 @@ class FlowController:
             erfahrungen_total = erfahrungs_stats["total"],
             erfahrungen_gelernt = erfahrungs_stats["gelernt"],
             erfahrungen_wartend = erfahrungs_stats["ungelernt"],
-            reward_learning_enabled = self.reward_learning_enabled,
         )
 
     def reset_model(self) -> None:

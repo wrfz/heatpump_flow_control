@@ -213,9 +213,10 @@ class TestFlowControlNumberIntegration:
         # Mock controller calculation
         mock_features = Features(
             raum_abweichung = 1.0,
-            aussen_trend = 0.5,
-            aussen_trend_kurz = 0.3,
-            aussen_trend_mittel = 0.2,
+            aussen_trend_1h = 0.5,
+            aussen_trend_2h = 0.3,
+            aussen_trend_3h = 0.2,
+            aussen_trend_6h = 0.1,
         )
         mock_hass.async_add_executor_job.return_value = (38.5, mock_features)
 
@@ -282,9 +283,10 @@ class TestFlowControllerIntegration:
             38.5,
             Features(
                 raum_abweichung = 1.0,
-                aussen_trend = 0.5,
-                aussen_trend_kurz = 0.3,
-                aussen_trend_mittel = 0.2,
+                aussen_trend_1h = 0.5,
+                aussen_trend_2h = 0.3,
+                aussen_trend_3h = 0.2,
+                aussen_trend_6h = 0.1,
             ),
         )
 
