@@ -1,12 +1,16 @@
 """Number platform for Heatpump Flow Control integration."""
 import asyncio
-from datetime import timedelta
+from datetime import datetime, timedelta
 import logging
 from pathlib import Path
 import pickle
 from typing import Any, cast
 
 from homeassistant.components.number import NumberEntity, NumberMode
+from homeassistant.components.recorder import get_instance
+from homeassistant.components.recorder.history import (
+    get_significant_states_with_session,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant, State, callback
@@ -467,11 +471,10 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
                 "learning_enabled": current_betriebsart == self._betriebsart_heizen_wert
                 if current_betriebsart
                 else True,
-                # NEU: Reward-Learning Statistiken
-                "reward_learning": model_statistics.get("reward_learning_enabled", True),
-                "erfahrungen_total": model_statistics.get("erfahrungen_total", 0),
-                "erfahrungen_gelernt": model_statistics.get("erfahrungen_gelernt", 0),
-                "erfahrungen_wartend": model_statistics.get("erfahrungen_wartend", 0),
+                # NEU: History-basiertes Lernen (persistiert über Reboots)
+                "history_learning": True,
+                "erfahrungen_gelernt": self._extra_attributes.get("erfahrungen_gelernt", 0),
+                "last_learning_time": self._controller.letztes_lern_timestamp.isoformat(),
             }
 
             # Nach der Berechnung speichern
@@ -519,10 +522,209 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
                 sensor_values.raum_soll,
             )
 
+            # NEU: History-basiertes Lernen (alle 10 Zyklen)
+            if self._controller.predictions_count % 10 == 0:
+                await self._async_lerne_aus_history(sensor_values.raum_ist)
+
         except Exception:
             _LOGGER.exception("Error updating Vorlauf-Soll")
             self._available = False
             self.async_write_ha_state()
+
+    async def _async_lerne_aus_history(self, current_raum_ist: float) -> None:
+        """Lernt aus Home Assistant History-Daten.
+
+        Fragt Sensor-Werte von vor 2-6 Stunden ab und lernt daraus.
+        """
+
+        _LOGGER.info("_async_lerne_aus_history()")
+
+        # Prüfe ob in Heizmodus
+        if not await self._is_heating_mode():
+            _LOGGER.debug("Nicht im Heizmodus, überspringe History-Lernen")
+            return
+
+        # Prüfe ob genug Zeit seit letztem Lernen vergangen ist (min 30 Min)
+        now = dt_util.now()
+        # Konvertiere letztes_lern_timestamp zu timezone-aware wenn nötig
+        letztes_lernen = self._controller.letztes_lern_timestamp
+        if letztes_lernen.tzinfo is None:
+            letztes_lernen = dt_util.as_local(letztes_lernen)
+
+        time_since_last_learn = (now - letztes_lernen).total_seconds() / 60
+        if time_since_last_learn < 30:
+            _LOGGER.debug("Letzte Lern-Session vor %.1f Minuten, überspringe", time_since_last_learn)
+            return
+
+        try:
+            # Zeitfenster: 2-6 Stunden zurück
+            end_time = now - timedelta(hours=self._controller.min_reward_hours)
+            start_time = now - timedelta(hours=self._controller.max_reward_hours)
+
+            # Alle relevanten Entities
+            entity_ids = [
+                self._aussen_temp_sensor,
+                self._raum_ist_sensor,
+                self._raum_soll_sensor,
+                self._vorlauf_ist_sensor,
+                self.entity_id,  # Unsere eigene Entity (vorlauf_soll)
+            ]
+
+            _LOGGER.debug(
+                "Query History von %s bis %s für Entities: %s",
+                start_time.strftime("%H:%M"),
+                end_time.strftime("%H:%M"),
+                entity_ids,
+            )
+
+            # Query History über Recorder (Custom Integration kompatibel)
+            def _get_history():
+                """Query history in executor."""
+                instance = get_instance(self.hass)
+                with instance.get_session() as session:
+                    return get_significant_states_with_session(
+                        self.hass,
+                        session,
+                        start_time,
+                        end_time,
+                        entity_ids,
+                        significant_changes_only=False,
+                    )
+
+            history_data = await self.hass.async_add_executor_job(_get_history)
+
+            if not history_data:
+                _LOGGER.debug("Keine History-Daten gefunden")
+                return
+
+            # Extrahiere und kombiniere States
+            historical_states = self._extract_historical_states(history_data)
+
+            if not historical_states:
+                _LOGGER.debug("Keine kombinierten Historical States gefunden")
+                return
+
+            _LOGGER.info("Gefunden: %d Historical States zum Lernen", len(historical_states))
+
+            # Führe Lernen im Executor aus (blocking)
+            lern_stats = await self.hass.async_add_executor_job(
+                self._controller.lerne_aus_history,
+                historical_states,
+                current_raum_ist,
+                now,  # timezone-aware datetime
+            )
+
+            if lern_stats["gelernt_positiv"] + lern_stats["gelernt_negativ"] > 0:
+                _LOGGER.info(
+                    "History-Lernen abgeschlossen: %d positiv, %d negativ",
+                    lern_stats["gelernt_positiv"],
+                    lern_stats["gelernt_negativ"],
+                )
+                # Stats in Attributes speichern
+                self._extra_attributes["erfahrungen_gelernt"] = (
+                    self._extra_attributes.get("erfahrungen_gelernt", 0) +
+                    lern_stats["gelernt_positiv"] + lern_stats["gelernt_negativ"]
+                )
+                await self._async_save_model()
+
+        except Exception as e:
+            _LOGGER.error("Fehler beim History-Lernen: %s", e, exc_info=True)
+
+    def _extract_historical_states(
+        self,
+        history_data: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Extrahiert Historical States aus HA History.
+
+        Kombiniert States von allen Sensoren zu Zeitpunkten wo alle verfügbar sind.
+        """
+
+        # Erstelle Maps: entity_id -> list of states
+        aussen_states = history_data.get(self._aussen_temp_sensor, [])
+        raum_ist_states = history_data.get(self._raum_ist_sensor, [])
+        raum_soll_states = history_data.get(self._raum_soll_sensor, [])
+        vorlauf_ist_states = history_data.get(self._vorlauf_ist_sensor, [])
+        vorlauf_soll_states = history_data.get(self.entity_id, [])
+
+        if not vorlauf_soll_states:
+            _LOGGER.debug("Keine Vorlauf-Soll History gefunden (Entity: %s)", self.entity_id)
+            return []
+
+        historical_states = []
+
+        # Iteriere über Vorlauf-Soll States (unsere Entscheidungen)
+        for vorlauf_soll_state in vorlauf_soll_states:
+            try:
+                timestamp = vorlauf_soll_state.last_updated
+                vorlauf_soll = float(vorlauf_soll_state.state)
+
+                # Finde nearest states für alle anderen Sensoren (±5 Min Toleranz)
+                tolerance = timedelta(minutes=5)
+
+                aussen_temp = self._find_nearest_state_value(aussen_states, timestamp, tolerance)
+                raum_ist = self._find_nearest_state_value(raum_ist_states, timestamp, tolerance)
+                raum_soll = self._find_nearest_state_value(raum_soll_states, timestamp, tolerance)
+                vorlauf_ist = self._find_nearest_state_value(vorlauf_ist_states, timestamp, tolerance)
+
+                # Nur wenn alle Werte verfügbar
+                if all(v is not None for v in [aussen_temp, raum_ist, raum_soll, vorlauf_ist]):
+                    historical_states.append({
+                        'timestamp': timestamp,
+                        'aussen_temp': aussen_temp,
+                        'raum_ist': raum_ist,
+                        'raum_soll': raum_soll,
+                        'vorlauf_ist': vorlauf_ist,
+                        'vorlauf_soll': vorlauf_soll,
+                    })
+
+            except (ValueError, TypeError) as e:
+                _LOGGER.debug("Überspringe State wegen Fehler: %s", e)
+                continue
+
+        return historical_states
+
+    def _find_nearest_state_value(
+        self,
+        states: list[State],
+        target_time: datetime,
+        tolerance: timedelta,
+    ) -> float | None:
+        """Findet den nächsten State-Wert zu einer Zielzeit.
+
+        Args:
+            states: Liste von States
+            target_time: Zielzeitpunkt
+            tolerance: Maximale zeitliche Abweichung
+
+        Returns:
+            Float-Wert oder None wenn nicht gefunden
+        """
+
+        if not states:
+            return None
+
+        # Finde State mit kleinster Zeitdifferenz
+        best_state = None
+        best_diff = None
+
+        for state in states:
+            if state.state in ("unavailable", "unknown"):
+                continue
+
+            time_diff = abs((state.last_updated - target_time).total_seconds())
+
+            if time_diff <= tolerance.total_seconds():
+                if best_diff is None or time_diff < best_diff:
+                    best_diff = time_diff
+                    best_state = state
+
+        if best_state:
+            try:
+                return float(best_state.state)
+            except (ValueError, TypeError):
+                return None
+
+        return None
 
     async def _async_set_vorlauf_soll(self, value: float) -> None:
         """Set the Vorlauf-Soll on the target entity."""

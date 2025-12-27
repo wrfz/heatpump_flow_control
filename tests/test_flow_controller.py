@@ -6,152 +6,11 @@ from unittest.mock import patch
 from custom_components.heatpump_flow_control.flow_controller import (
     DateTimeTemperatur,
     Erfahrung,
-    ErfahrungsSpeicher,
     Features,
     FlowController,
     HistoryBuffer,
     SensorValues,
 )
-
-
-class TestErfahrungsSpeicher:
-    """Test experience storage for reward-based learning."""
-
-    def test_initialization(self):
-        """Test ErfahrungsSpeicher initialization."""
-        speicher = ErfahrungsSpeicher(max_size=100)
-
-        assert len(speicher.erfahrungen) == 0
-        assert speicher.max_size == 100
-
-    def test_speichere_erfahrung(self):
-        """Test storing an experience."""
-        speicher = ErfahrungsSpeicher()
-
-        features = Features(aussen_temp = 5.0, raum_ist = 22.0)
-        speicher.speichere_erfahrung(
-            features=features,
-            vorlauf_soll=35.0,
-            raum_ist_vorher=22.0,
-            raum_soll=21.0,
-        )
-
-        assert len(speicher.erfahrungen) == 1
-        assert speicher.erfahrungen[0].vorlauf_soll == 35.0
-        assert speicher.erfahrungen[0].gelernt is False
-        assert speicher.erfahrungen[0].timestamp is not None
-
-    def test_max_size_limit(self):
-        """Test that max_size is enforced."""
-        speicher = ErfahrungsSpeicher(max_size=3)
-        features = Features()
-
-        for i in range(5):
-            speicher.speichere_erfahrung(
-                features=features,
-                vorlauf_soll=30.0 + i,
-                raum_ist_vorher=22.0,
-                raum_soll=21.0,
-            )
-
-        # Should only keep last 3
-        assert len(speicher.erfahrungen) == 3
-        assert speicher.erfahrungen[0].vorlauf_soll == 32.0  # 2nd experience
-
-    def test_get_lernbare_erfahrungen(self):
-        """Test retrieving learnable experiences."""
-        speicher = ErfahrungsSpeicher()
-        features = Features()
-
-        # Add experiences at different times
-        now = datetime.now()
-
-        # Too recent (1 hour)
-        with patch(
-            "custom_components.heatpump_flow_control.flow_controller.datetime"
-        ) as mock_dt:
-            mock_dt.now.return_value = now - timedelta(hours=1)
-            speicher.speichere_erfahrung(
-                features=features,
-                vorlauf_soll=30.0,
-                raum_ist_vorher=22.0,
-                raum_soll=21.0,
-            )
-
-        # Perfect age (3 hours)
-        with patch(
-            "custom_components.heatpump_flow_control.flow_controller.datetime"
-        ) as mock_dt:
-            mock_dt.now.return_value = now - timedelta(hours=3)
-            speicher.speichere_erfahrung(
-                features=features,
-                vorlauf_soll=35.0,
-                raum_ist_vorher=22.0,
-                raum_soll=21.0,
-            )
-
-        # Too old (7 hours)
-        with patch(
-            "custom_components.heatpump_flow_control.flow_controller.datetime"
-        ) as mock_dt:
-            mock_dt.now.return_value = now - timedelta(hours=7)
-            speicher.speichere_erfahrung(
-                features=features,
-                vorlauf_soll=40.0,
-                raum_ist_vorher=22.0,
-                raum_soll=21.0,
-            )
-
-        # Manually set timestamps (patch doesn't work in list comprehension)
-        speicher.erfahrungen[0].timestamp = now - timedelta(hours=1)
-        speicher.erfahrungen[1].timestamp = now - timedelta(hours=3)
-        speicher.erfahrungen[2].timestamp = now - timedelta(hours=7)
-
-        lernbar = speicher.get_lernbare_erfahrungen(min_stunden=2.0, max_stunden=6.0)
-
-        # Only the 3-hour old experience should be learnable
-        assert len(lernbar) == 1
-        assert lernbar[0].vorlauf_soll == 35.0
-
-    def test_markiere_gelernt(self):
-        """Test marking experience as learned."""
-        speicher = ErfahrungsSpeicher()
-        features = Features()
-
-        speicher.speichere_erfahrung(
-            features=features,
-            vorlauf_soll=30.0,
-            raum_ist_vorher=22.0,
-            raum_soll=21.0,
-        )
-
-        erfahrung = speicher.erfahrungen[0]
-        assert erfahrung.gelernt is False
-
-        speicher.markiere_gelernt(erfahrung)
-        assert erfahrung.gelernt is True
-
-    def test_get_stats(self):
-        """Test statistics retrieval."""
-        speicher = ErfahrungsSpeicher()
-        features = Features()
-
-        # Add 3 experiences, mark 2 as learned
-        for i in range(3):
-            speicher.speichere_erfahrung(
-                features=features,
-                vorlauf_soll=30.0 + i,
-                raum_ist_vorher=22.0,
-                raum_soll=21.0,
-            )
-
-        speicher.markiere_gelernt(speicher.erfahrungen[0])
-        speicher.markiere_gelernt(speicher.erfahrungen[1])
-
-        stats = speicher.get_stats()
-        assert stats["total"] == 3
-        assert stats["gelernt"] == 2
-        assert stats["ungelernt"] == 1
 
 
 class TestFlowControllerInit:
@@ -451,31 +310,6 @@ class TestPrediction:
 class TestLearning:
     """Test learning functionality."""
 
-    def test_experience_storage(self):
-        """Test that experiences are stored during predictions."""
-        controller = FlowController(
-            min_vorlauf=18.0,
-            max_vorlauf=39.0,
-            learning_rate=0.01,
-            trend_history_size=12
-        )
-        controller.use_fallback = False
-
-        # Make prediction - this stores an experience
-        vorlauf, features = controller.berechne_vorlauf_soll(
-            SensorValues(
-                aussen_temp=5.0,
-                raum_ist=22.0,
-                raum_soll=21.0,
-                vorlauf_ist=35.0
-            )
-        )
-
-        # Should store experience in ErfahrungsSpeicher
-        stats = controller.erfahrungs_speicher.get_stats()
-        assert stats["total"] == 1
-        assert stats["ungelernt"] == 1
-
     def test_prediction_updates_history(self):
         """Test that predictions update temperature history."""
         controller = FlowController(
@@ -554,43 +388,6 @@ class TestLearning:
 
         # Should have negative reward (room got worse)
         assert reward < 0
-
-    def test_lerne_reward_processes_old_experiences(self):
-        """Test that reward learning processes old experiences."""
-        controller = FlowController(
-            min_vorlauf=18.0,
-            max_vorlauf=39.0,
-            learning_rate=0.01,
-            trend_history_size=12
-        )
-        #controller.reward_learning_enabled = True
-
-        # Add an old experience manually
-        now = datetime.now()
-        old_time = now - timedelta(hours=3)
-
-        features = Features(
-            raum_abweichung = 1.0,
-            aussen_temp = 5.0
-        )
-        controller.erfahrungs_speicher.speichere_erfahrung(
-            features=features,
-            vorlauf_soll=35.0,
-            raum_ist_vorher=21.0,
-            raum_soll=22.0,
-        )
-
-        # Manually set old timestamp
-        controller.erfahrungs_speicher.erfahrungen[0].timestamp = old_time
-
-        # Add current data to longterm history
-        #controller.raum_temp_longterm = [(now, 21.5)]
-
-        # Perform reward learning
-        stats = controller._lerne_aus_erfahrungen(raum_ist=21.5)
-
-        # Should have attempted learning (check stats exist)
-        assert isinstance(stats, dict)
 
 class TestRealisticLearningScenario:
     """Test realistic learning scenarios with full sensor setup."""
@@ -671,40 +468,6 @@ class TestRealisticLearningScenario:
 
         # Model sollte aus Fallback-Modus raus sein
         assert not controller.use_fallback, "Model sollte nach 50 Zyklen lernen"
-
-
-class TestModelStats:
-    """Test model statistics."""
-
-    def test_get_model_statistics_with_experiences(self):
-        """Test statistics with stored experiences."""
-        controller = FlowController(
-            min_vorlauf=18.0,
-            max_vorlauf=39.0,
-            learning_rate=0.01,
-            trend_history_size=12
-        )
-
-        # Add some experiences
-        features = Features()
-        for i in range(5):
-            controller.erfahrungs_speicher.speichere_erfahrung(
-                features=features,
-                vorlauf_soll=35.0,
-                raum_ist_vorher=22.0,
-                raum_soll=21.0,
-            )
-
-        # Mark some as learned
-        controller.erfahrungs_speicher.markiere_gelernt(
-            controller.erfahrungs_speicher.erfahrungen[0]
-        )
-
-        stats = controller.get_model_statistics()
-
-        assert stats.erfahrungen_total == 5
-        assert stats.erfahrungen_gelernt == 1
-        assert stats.erfahrungen_wartend == 4
 
 
 class FlowTestHelper:

@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import logging
 import math
 import statistics
+from typing import Any
 
 from river import compose, linear_model, metrics, optim, preprocessing
 
@@ -21,90 +22,6 @@ from .types import (
 # ruff: noqa: BLE001
 
 _LOGGER = logging.getLogger(__name__)
-
-
-class ErfahrungsSpeicher:
-    """Speichert Erfahrungen für verzögertes Reward-basiertes Lernen."""
-
-    def __init__(self, max_size: int = 200) -> None:
-        """Initialize experience storage."""
-        self.erfahrungen: list[Erfahrung] = []
-        self.max_size = max_size
-
-    def speichere_erfahrung(
-        self,
-        features: Features,
-        vorlauf_soll: float,
-        raum_ist_vorher: float,
-        raum_soll: float,
-    ) -> None:
-        """Speichert eine Erfahrung mit Timestamp.
-
-        Args:
-            features: Feature-Dictionary zum Zeitpunkt der Entscheidung
-            vorlauf_gesetzt: Der gesetzte Vorlauf-Wert
-            raum_ist_vorher: Raumtemperatur zum Zeitpunkt der Entscheidung
-            raum_soll: Soll-Raumtemperatur
-        """
-
-        _LOGGER.info("speichere_erfahrung()")
-
-        erfahrung = Erfahrung(
-            timestamp = datetime.now(),
-            features = features.copy(),
-            vorlauf_soll = vorlauf_soll,
-            raum_ist_vorher = raum_ist_vorher,
-            raum_soll = raum_soll,
-            gelernt = False,
-        )
-        self.erfahrungen.append(erfahrung)
-
-        if len(self.erfahrungen) > self.max_size:
-            self.erfahrungen.pop(0)
-
-    def get_lernbare_erfahrungen(
-        self, min_stunden: float = 2.0, max_stunden: float = 6.0
-    ) -> list[Erfahrung]:
-        """Gibt Erfahrungen zurück, die alt genug sind zum Lernen.
-
-        Args:
-            min_stunden: Minimales Alter in Stunden
-            max_stunden: Maximales Alter in Stunden
-
-        Returns:
-            Liste von lernbaren Erfahrungen
-        """
-
-        _LOGGER.info("get_lernbare_erfahrungen()")
-
-        now = datetime.now()
-        lernbar: list[Erfahrung] = []
-
-        for erfahrung in self.erfahrungen:
-            if erfahrung.gelernt:
-                continue
-
-            stunden_alt = (now - erfahrung.timestamp).total_seconds() / 3600
-            if min_stunden <= stunden_alt <= max_stunden:
-                lernbar.append(erfahrung)
-
-        return lernbar
-
-    def markiere_gelernt(self, erfahrung: Erfahrung) -> None:
-        """Markiert eine Erfahrung als gelernt."""
-        erfahrung.gelernt = True
-
-    def get_stats(self) -> dict[str, int]:
-        """Gibt Statistiken über den Speicher zurück."""
-        total = len(self.erfahrungen)
-        gelernt = sum(1 for e in self.erfahrungen if e.gelernt)
-        ungelernt = total - gelernt
-
-        return {
-            "total": total,
-            "gelernt": gelernt,
-            "ungelernt": ungelernt,
-        }
 
 
 class FlowController:
@@ -126,9 +43,10 @@ class FlowController:
 
         self.predictions_count = 0
 
-        self.erfahrungs_speicher = ErfahrungsSpeicher(max_size=200)
+        # History-basiertes Lernen: Kein ErfahrungsSpeicher mehr nötig
         self.min_reward_hours = 2.0  # Mindeststunden bis Bewertung
         self.max_reward_hours = 6.0  # Maximalstunden bis Bewertung
+        self.letztes_lern_timestamp = datetime.now() - timedelta(hours=24)  # Vermeide Doppel-Lernen
 
         self._setup()
 
@@ -198,12 +116,12 @@ class FlowController:
 
         Wird bei Bedarf aufgerufen wenn Objekt aus Storage geladen wurde.
         """
-        if not hasattr(self, "erfahrungs_speicher"):
-            self.erfahrungs_speicher = ErfahrungsSpeicher(max_size=200)
         if not hasattr(self, "min_reward_hours"):
             self.min_reward_hours = 2.0
         if not hasattr(self, "max_reward_hours"):
             self.max_reward_hours = 6.0
+        if not hasattr(self, "letztes_lern_timestamp"):
+            self.letztes_lern_timestamp = datetime.now() - timedelta(hours=24)
 
     def _heizkurve_fallback(self, aussen_temp: float, raum_abweichung: float) -> float:
         """Fallback Heizkurve für Kaltstart.
@@ -403,54 +321,112 @@ class FlowController:
 
         return reward, korrigierter_vorlauf_soll
 
-    def _lerne_aus_erfahrungen(self, raum_ist: float) -> dict[str, int]:
-        """Lernt aus allen verfügbaren Erfahrungen.
+    def lerne_aus_history(
+        self,
+        historical_states: list[dict[str, Any]],
+        current_raum_ist: float,
+        current_time: datetime,
+    ) -> dict[str, int]:
+        """Lernt aus historischen HA-Sensor-Werten.
 
         Args:
-            raum_ist_jetzt: Aktuelle Raumtemperatur
+            historical_states: Liste von historischen Sensor-Zuständen (2-6h alt)
+                Format: [{
+                    'timestamp': datetime,
+                    'aussen_temp': float,
+                    'raum_ist': float,
+                    'raum_soll': float,
+                    'vorlauf_ist': float,
+                    'vorlauf_soll': float,  # Damals berechneter Soll-Wert
+                }, ...]
+            current_raum_ist: Aktuelle Raumtemperatur (für Reward-Bewertung)
+            current_time: Aktuelle Zeit (timezone-aware)
 
         Returns:
             Statistiken über das Lernen (gelernt_positiv, gelernt_negativ)
         """
 
-        _LOGGER.info("_lerne_aus_erfahrungen()")
-
-        lernbare = self.erfahrungs_speicher.get_lernbare_erfahrungen(
-            min_stunden=self.min_reward_hours, max_stunden=self.max_reward_hours
-        )
+        _LOGGER.info("_lerne_aus_history() mit %d historischen Zuständen", len(historical_states))
 
         stats = {"gelernt_positiv": 0, "gelernt_negativ": 0}
+
+        if not historical_states:
+            return stats
 
         # Aktuellen Trend für Bewertung holen
         trends = self._berechne_trends()
         aussen_trend = trends.aussen_trend_1h
 
-        for erfahrung in lernbare:
-            # Bewerte die Erfahrung
-            reward, korrigierter_vorlauf = self._bewerte_erfahrung(
-                erfahrung, raum_ist, aussen_trend
-            )
-
-            features: Features = erfahrung.features
-
+        for state in historical_states:
             try:
+                # Extrahiere Sensor-Werte
+                timestamp = state['timestamp']
+                aussen_temp = state['aussen_temp']
+                raum_ist_damals = state['raum_ist']
+                raum_soll = state['raum_soll']
+                vorlauf_ist = state['vorlauf_ist']
+                vorlauf_soll_damals = state['vorlauf_soll']
+
+                # Rekonstruiere Features vom damaligen Zeitpunkt
+                # (vereinfachte Version ohne komplette Historie)
+                raum_abweichung = raum_soll - raum_ist_damals
+                stunde = timestamp.hour + timestamp.minute / 60.0
+                stunde_sin = math.sin(2 * math.pi * stunde / 24)
+                stunde_cos = math.cos(2 * math.pi * stunde / 24)
+                wochentag = timestamp.weekday()
+                wochentag_sin = math.sin(2 * math.pi * wochentag / 7)
+                wochentag_cos = math.cos(2 * math.pi * wochentag / 7)
+
+                features = Features(
+                    aussen_temp=aussen_temp,
+                    raum_ist=raum_ist_damals,
+                    raum_soll=raum_soll,
+                    vorlauf_ist=vorlauf_ist,
+                    raum_abweichung=raum_abweichung,
+                    # Trends können wir nicht rekonstruieren - setze auf 0
+                    aussen_trend_1h=0.0,
+                    aussen_trend_2h=0.0,
+                    aussen_trend_3h=0.0,
+                    aussen_trend_6h=0.0,
+                    stunde_sin=stunde_sin,
+                    stunde_cos=stunde_cos,
+                    wochentag_sin=wochentag_sin,
+                    wochentag_cos=wochentag_cos,
+                    temp_diff=aussen_temp - raum_ist_damals,
+                    vorlauf_raum_diff=vorlauf_ist - raum_ist_damals,
+                )
+
+                # Erstelle Erfahrung für Bewertung
+                erfahrung = Erfahrung(
+                    timestamp=timestamp,
+                    features=features,
+                    vorlauf_soll=vorlauf_soll_damals,
+                    raum_ist_vorher=raum_ist_damals,
+                    raum_soll=raum_soll,
+                    gelernt=False,
+                )
+
+                # Bewerte die Erfahrung
+                reward, korrigierter_vorlauf = self._bewerte_erfahrung(
+                    erfahrung, current_raum_ist, aussen_trend
+                )
+
                 if reward >= 0:
                     # Gute Erfahrung: Lerne mit original Vorlauf
-                    # Höheres sample_weight für sehr gute Erfahrungen
                     sample_weight = 1.0 + reward  # 1.0 bis 2.0
                     self.model.learn_one(
                         features.to_dict(),
-                        erfahrung.vorlauf_soll,
+                        vorlauf_soll_damals,
                         sample_weight=sample_weight,
                     )
-
                     stats["gelernt_positiv"] += 1
 
                     _LOGGER.info(
-                        "✓ Reward-Lernen (Reward=%.1f, Weight=%.1f): Vorlauf %.1f°C war gut",
+                        "✓ History-Lernen (Reward=%.1f, Weight=%.1f): Vorlauf %.1f°C war gut (von %s)",
                         reward,
                         sample_weight,
-                        erfahrung.vorlauf_soll,
+                        vorlauf_soll_damals,
+                        timestamp.strftime("%H:%M"),
                     )
                 else:
                     # Schlechte Erfahrung: Lerne mit korrigiertem Vorlauf
@@ -458,30 +434,28 @@ class FlowController:
                     self.model.learn_one(
                         features.to_dict(), korrigierter_vorlauf, sample_weight=sample_weight
                     )
-
                     stats["gelernt_negativ"] += 1
 
                     _LOGGER.warning(
-                        "✗ Reward-Lernen (Reward=%.1f, Weight=%.1f): Vorlauf %.1f°C → besser %.1f°C",
+                        "✗ History-Lernen (Reward=%.1f, Weight=%.1f): Vorlauf %.1f°C → besser %.1f°C (von %s)",
                         reward,
                         sample_weight,
-                        erfahrung.vorlauf_soll,
+                        vorlauf_soll_damals,
                         korrigierter_vorlauf,
+                        timestamp.strftime("%H:%M"),
                     )
 
-                # Markiere als gelernt
-                self.erfahrungs_speicher.markiere_gelernt(erfahrung)
-
             except Exception as e:
-                _LOGGER.error("Fehler beim Reward-Learning: %s", e)
+                _LOGGER.error("Fehler beim History-Learning für State %s: %s", state.get('timestamp'), e)
 
         if stats["gelernt_positiv"] + stats["gelernt_negativ"] > 0:
             _LOGGER.info(
-                "Reward-Lernen abgeschlossen: %d positiv, %d negativ (von %d lernbar)",
+                "History-Lernen abgeschlossen: %d positiv, %d negativ (von %d States)",
                 stats["gelernt_positiv"],
                 stats["gelernt_negativ"],
-                len(lernbare),
+                len(historical_states),
             )
+            self.letztes_lern_timestamp = current_time
 
         return stats
 
@@ -572,20 +546,8 @@ class FlowController:
         if not model_was_reset:
             self.predictions_count += 1
 
-        # Speichere diese Entscheidung für späteres Reward-Learning
-        self.erfahrungs_speicher.speichere_erfahrung(
-            features=features,
-            vorlauf_soll=vorlauf_soll,
-            raum_ist_vorher=sensor_values.raum_ist,
-            raum_soll=sensor_values.raum_soll,
-        )
-
-        # Lerne aus alten Erfahrungen (2-6h alt)
-        if self.predictions_count % 2 == 0:
-            # Nur jedes 2. Mal ausführen um Performance zu schonen
-            lern_stats = self._lerne_aus_erfahrungen(raum_ist=sensor_values.raum_ist)
-            if lern_stats["gelernt_positiv"] + lern_stats["gelernt_negativ"] > 0:
-                _LOGGER.debug("Reward-Learning Stats: %s", lern_stats)
+        # History-basiertes Lernen wird von number.py über lerne_aus_history() aufgerufen
+        # (Nicht mehr hier, da wir Zugriff auf HA-History brauchen)
 
         _LOGGER.info(
             "Vorlauf-Soll berechnet: %.1f°C (Außen: %.1f°C, Raum: %.1f/%.1f°C, Trend: [1h: %.2f, 2h: %.2f, 3h: %.2f, 6h: %.2f])",
@@ -609,16 +571,15 @@ class FlowController:
 
     def get_model_statistics(self) -> ModelStats:
         """Gibt Model-Statistiken zurück."""
-        erfahrungs_stats = self.erfahrungs_speicher.get_stats()
-
+        # History-basiertes Lernen: Stats kommen direkt aus HA-History
         return ModelStats(
             mae = self.metric.get() if self.predictions_count > 0 else 0.0,
             predictions_count = self.predictions_count,
             use_fallback = self.use_fallback,
             history_size = len(self.aussen_temp_history),
-            erfahrungen_total = erfahrungs_stats["total"],
-            erfahrungen_gelernt = erfahrungs_stats["gelernt"],
-            erfahrungen_wartend = erfahrungs_stats["ungelernt"],
+            erfahrungen_total = 0,  # Nicht mehr relevant
+            erfahrungen_gelernt = 0,  # Wird in number.py gezählt
+            erfahrungen_wartend = 0,  # Nicht mehr relevant
         )
 
     def reset_model(self) -> None:
