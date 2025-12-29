@@ -41,7 +41,7 @@ class FlowController:
         self.learning_rate = learning_rate
         self.trend_history_size = trend_history_size
 
-        self.use_fallback = True
+        self.use_fallback = False  # Kein Fallback - Model wird sofort mit synthetischen Daten trainiert
         self.predictions_count = 0
 
         # Feature-Liste für zeitversetztes Lernen (statt HA DB)
@@ -86,6 +86,10 @@ class FlowController:
         if force_fallback:
             self.use_fallback = True
             _LOGGER.info("Fallback erzwungen (Model-Reset)")
+        else:
+            # Model sofort mit synthetischen Daten trainieren
+            _LOGGER.info("Trainiere Model mit synthetischen Daten")
+            self._train_synthetic_data()
 
         _LOGGER.info(
             "_setup(): min=%s, max=%s, lr=%s, history=%s",
@@ -96,12 +100,10 @@ class FlowController:
         )
 
     def _heizkurve_fallback(self, aussen_temp: float, raum_abweichung: float) -> float:
-        """Fallback Heizkurve für Kaltstart.
+        """Heizkurve für synthetisches Training.
 
         Typische Heizkurve: Vorlauf = A - B * Außentemperatur.
         """
-
-        _LOGGER.info("_heizkurve_fallback()")
 
         # Heizkurve: 10°C → 26.4°C bis -15°C → 35°C
         p0 = TempVorlauf(10.0, 26.4)
@@ -119,9 +121,62 @@ class FlowController:
 
         vorlauf = max(v_min, min(vorlauf, v_max))
 
-        _LOGGER.info("_heizkurve_fallback() => %.1f", vorlauf)
-
         return vorlauf
+
+    def _train_synthetic_data(self) -> None:
+        """Trainiere Model mit synthetischen Daten aus der Heizkurve."""
+
+        temp_min = -15.0
+        temp_max = 10.0
+        synthetic_count = 0
+
+        _LOGGER.info("Starte synthetisches Training (Temperaturbereich %.1f bis %.1f°C)", temp_min, temp_max)
+
+        # Viele Trainingsdurchläufe für präzises Lernen
+        for _ in range(50):
+            for t_aussen in range(int(temp_min), int(temp_max) + 1):
+                # Schwerpunkt auf 22.5°C legen
+                for raum_soll in [21.0, 21.5, 22.0, 22.5, 22.5, 23.0]:
+                    # Mehrere raum_abweichungen für robustes Training
+                    for raum_abweichung in [-0.5, 0.0, 0.5]:
+                        # Berechne Vorlauf-Soll aus Heizkurve
+                        vorlauf_curve = self._heizkurve_fallback(
+                            float(t_aussen), raum_abweichung
+                        )
+
+                        # Vorlauf_ist variieren: mal zu niedrig, mal genau richtig, mal zu hoch
+                        for vorlauf_offset in [-2.0, 0.0, 2.0]:
+                            vorlauf_ist_value = vorlauf_curve + vorlauf_offset
+
+                            # Trainiere das Modell mit synthetischen Features
+                            synthetic_features = Features(
+                                aussen_temp=float(t_aussen),
+                                raum_ist=raum_soll + raum_abweichung,
+                                raum_soll=raum_soll,
+                                vorlauf_ist=vorlauf_ist_value,
+                                raum_abweichung=raum_abweichung,
+                                aussen_trend_1h=0.0,
+                                aussen_trend_2h=0.0,
+                                aussen_trend_3h=0.0,
+                                aussen_trend_6h=0.0,
+                                stunde_sin=0.0,
+                                stunde_cos=1.0,
+                                wochentag_sin=0.0,
+                                wochentag_cos=1.0,
+                                temp_diff=float(t_aussen) - (raum_soll + raum_abweichung),
+                                vorlauf_raum_diff=vorlauf_ist_value - (raum_soll + raum_abweichung),
+                            )
+
+                            self.model.learn_one(
+                                synthetic_features.to_dict(),
+                                vorlauf_curve
+                            )
+                            synthetic_count += 1
+
+        _LOGGER.info(
+            "Synthetisches Training abgeschlossen: %d Datenpunkte generiert",
+            synthetic_count,
+        )
 
     def _berechne_trends(self) -> dict[str, float]:
         """Berechnet zeitnormierte Temperatur-Trends in °C/Stunde.
@@ -341,42 +396,29 @@ class FlowController:
 
         features = self._erstelle_features(sensor_values)
 
-        # Während Kaltstart: Heizkurve verwenden
-        if self.use_fallback:
+        # Model für Prediction verwenden
+        try:
+            raw_prediction = self.model.predict_one(features.to_dict())
+            _LOGGER.info(
+                "Model-Prediction: %.2f°C (Außen: %.1f°C, Raum-Abw: %.2f°C, Vorlauf-Ist: %.1f°C)",
+                raw_prediction,
+                sensor_values.aussen_temp,
+                features.raum_abweichung,
+                sensor_values.vorlauf_ist,
+            )
+            vorlauf_soll = raw_prediction
+
+            if vorlauf_soll > 1000 or vorlauf_soll < -1000:
+                _LOGGER.warning(
+                    "Model liefert unrealistischen Wert %.1f°C, clampe auf Grenzen",
+                    vorlauf_soll,
+                )
+
+        except Exception as e:
+            _LOGGER.error("Fehler bei Model-Prediction: %s, verwende Fallback-Heizkurve", e)
             vorlauf_soll = self._heizkurve_fallback(
                 sensor_values.aussen_temp, features.raum_abweichung
             )
-            _LOGGER.debug(
-                "Verwende Heizkurve (Kaltstart %d/%d): %.1f°C",
-                self.predictions_count,
-                self.min_predictions_for_model,
-                vorlauf_soll,
-            )
-        else:
-            # Model verwenden
-            try:
-                raw_prediction = self.model.predict_one(features.to_dict())
-                _LOGGER.info(
-                    "Model-Prediction (roh): %.2f°C (Features: aussen=%.1f, raum_abw=%.2f, vorlauf_ist=%.1f)",
-                    raw_prediction,
-                    sensor_values.aussen_temp,
-                    features.raum_abweichung,
-                    sensor_values.vorlauf_ist,
-                )
-                vorlauf_soll = raw_prediction
-
-                if vorlauf_soll > 1000 or vorlauf_soll < -1000:
-                    _LOGGER.warning(
-                        "Model liefert unrealistischen Wert %.1f°C (Features: %s), verwende Heizkurve",
-                        vorlauf_soll,
-                        {k: round(v, 3) for k, v in features.items()},
-                    )
-
-            except Exception as e:
-                _LOGGER.error("Fehler bei Model-Prediction: %s", e)
-                vorlauf_soll = self._heizkurve_fallback(
-                    sensor_values.aussen_temp, features.raum_abweichung
-                )
 
         # Begrenzung auf konfigurierten Bereich
         vorlauf_soll = max(self.min_vorlauf, min(self.max_vorlauf, vorlauf_soll))
@@ -394,79 +436,8 @@ class FlowController:
         )
         self.erfahrungs_liste.append(erfahrung)
 
-        # Beim Übergang vom Fallback zum Model-Modus:
-        # Trainiere das Model initial mit synthetischen Daten aus der Heizkurve
-        if (
-            self.use_fallback
-            and self.predictions_count >= self.min_predictions_for_model
-        ):
-            _LOGGER.info(
-                "Übergang von Fallback zu Model-Modus. Starte synthetisches Training mit %d Fallback-Erfahrungen",
-                len(self.erfahrungs_liste),
-            )
-            self.use_fallback = False
-
-            # Berechne Temperatur-Bereiche aus Heizkurve
-            temp_min = -15.0
-            temp_max = 10.0
-
-            # Raum-Soll Bereich (Schwerpunkt 22.5°C)
-            raum_soll_min = 21.0
-            raum_soll_max = 23.0
-
-            # Generiere synthetische Trainingsdaten aus Heizkurve
-            synthetic_count = 0
-
-            # Viele Trainingsdurchläufe für präzises Lernen
-            for _ in range(50):
-                for t_aussen in range(int(temp_min), int(temp_max) + 1):
-                    # Schwerpunkt auf 22.5°C legen
-                    for raum_soll in [21.0, 21.5, 22.0, 22.5, 22.5, 23.0]:
-                        # Mehrere raum_abweichungen für robustes Training
-                        for raum_abweichung in [-0.5, 0.0, 0.5]:
-                            # Berechne Vorlauf-Soll aus Heizkurve
-                            vorlauf_curve = self._heizkurve_fallback(
-                                float(t_aussen), raum_abweichung
-                            )
-
-                            # Vorlauf_ist variieren: mal zu niedrig, mal genau richtig, mal zu hoch
-                            for vorlauf_offset in [-2.0, 0.0, 2.0]:
-                                vorlauf_ist_value = vorlauf_curve + vorlauf_offset
-
-                                # Trainiere das Modell mit synthetischen Features
-                                synthetic_features = Features(
-                                    aussen_temp=float(t_aussen),
-                                    raum_ist=raum_soll + raum_abweichung,
-                                    raum_soll=raum_soll,
-                                    vorlauf_ist=vorlauf_ist_value,
-                                    raum_abweichung=raum_abweichung,
-                                    aussen_trend_1h=0.0,  # Keine Trends für synthetische Daten
-                                    aussen_trend_2h=0.0,
-                                    aussen_trend_3h=0.0,
-                                    aussen_trend_6h=0.0,
-                                    stunde_sin=0.0,  # Mittag (12:00 Uhr)
-                                    stunde_cos=1.0,
-                                    wochentag_sin=0.0,  # Mittwoch
-                                    wochentag_cos=1.0,
-                                    temp_diff=float(t_aussen) - (raum_soll + raum_abweichung),
-                                    vorlauf_raum_diff=vorlauf_ist_value - (raum_soll + raum_abweichung),
-                                )
-
-                                self.model.learn_one(
-                                    synthetic_features.to_dict(),
-                                    vorlauf_curve  # Zielwert bleibt die Heizkurve
-                                )
-                                synthetic_count += 1
-
-            _LOGGER.info(
-                "Synthetisches Training abgeschlossen: %d Datenpunkte generiert",
-                synthetic_count,
-            )
-            _LOGGER.info("Wechsel von Heizkurve zu Model-Modus abgeschlossen")
-
-        # Lerne aus Features die 4h alt sind (intern) - nur wenn bereits im Model-Modus
-        if not self.use_fallback:
-            self.lerne_aus_features(sensor_values.raum_ist)
+        # Lerne aus Features die 4h alt sind (Reward-basiertes Lernen)
+        self.lerne_aus_features(sensor_values.raum_ist)
 
         _LOGGER.info(
             "Vorlauf-Soll berechnet: %.1f°C (Außen: %.1f°C, Raum: %.1f/%.1f°C, Vorlauf-Ist: %.1f°C)",

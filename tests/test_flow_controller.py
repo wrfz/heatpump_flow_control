@@ -816,13 +816,12 @@ class TestLearning:
     """Test prediction logic."""
 
     def test_fallback_learning(self):
-        """Test fallback heating curve and transition to model mode with proper time simulation.
+        """Test model predictions with synthetic training.
 
         This test verifies:
-        1. Fallback mode produces correct heating curve values
-        2. Transition from fallback to model mode after min_predictions_for_model
-        3. Model mode is active after transition
-        4. Time simulation allows for history-based learning
+        1. Model is trained with synthetic data at initialization
+        2. Model produces correct heating curve values immediately
+        3. Time simulation allows for history-based learning
         """
         flow_controller = FlowController(
             min_vorlauf=25.0,
@@ -830,12 +829,11 @@ class TestLearning:
             learning_rate=0.01,
             trend_history_size=12
         )
-        flow_controller.min_predictions_for_model = 10  # Switch to model after 10 predictions
-        flow_controller.min_reward_hours = 4.0  # Need 4 hours for learning
 
-        assert flow_controller.use_fallback
+        # Model should be ready immediately (no fallback phase)
+        assert not flow_controller.use_fallback
 
-        # Test fallback mode with 1-hour intervals between predictions
+        # Test model predictions with 1-hour intervals
         # raum_ist und raum_soll einmal setzen - bleiben dann sticky
         # vorlauf_ist folgt dem Sollwert mit Verzögerung (realistisches Verhalten)
         test_helper = (
@@ -871,33 +869,16 @@ class TestLearning:
 
             .t_aussen(-6.0).vorlauf_ist(30.8)
             .expect_vorlauf_soll(31.90, tolerance=0.1)
-        )
 
-        # Still in fallback mode (9 predictions so far, 540 minutes = 9 hours elapsed)
-        assert flow_controller.use_fallback
-        assert flow_controller.predictions_count == 9
-
-        # 10th prediction - should switch to model mode after this (600 minutes = 10 hours total)
-        test_helper = (
-            test_helper
             .t_aussen(-8.0).vorlauf_ist(31.5)
             .expect_vorlauf_soll(32.59, tolerance=0.1)
         )
 
-        # Now model mode should be active
-        assert not flow_controller.use_fallback
-        assert flow_controller.predictions_count == 10
-
-        # Debug: Check if model has been trained
-        print("\nDEBUG: Model after switch:")
-        print(f"  use_fallback: {flow_controller.use_fallback}")
-        print(f"  Model type: {type(flow_controller.model)}")
-
-        # Continue with model predictions
+        # Continue with more predictions - model continues learning from history
         # Temperatur SINKT weiter von -10°C bis -15°C → Vorlauf MUSS STEIGEN!
         test_helper = (
             test_helper
-            # Predictions 11-14: Temperatur sinkt weiter, vorlauf_ist folgt verzögert
+            # Continue predictions: Temperatur sinkt weiter, vorlauf_ist folgt verzögert
             .t_aussen(-10.0).vorlauf_ist(32.3)
             .expect_vorlauf_soll(33.28, tolerance=0.1)
 
@@ -908,16 +889,13 @@ class TestLearning:
             .expect_vorlauf_soll(34.66, tolerance=0.1)
 
             .t_aussen(-15.0).vorlauf_ist(34.5)
-            .expect_vorlauf_soll(35.0, tolerance=0.1)
+            .expect_vorlauf_soll(35.0, tolerance=0.1)  # Maximum erreicht
         )
-
-        # After 14 predictions (14 hours)
-        assert flow_controller.predictions_count == 14
 
         # Jetzt Temperatur STEIGT wieder von -15°C zurück auf 10°C → Vorlauf MUSS FALLEN!
         test_helper = (
             test_helper
-            # Predictions 15-27: Temperatur steigt, vorlauf_ist sinkt verzögert
+            # Temperatur steigt, vorlauf_ist sinkt verzögert
             .t_aussen(-14.0).vorlauf_ist(34.8)
             .expect_vorlauf_soll(34.66, tolerance=0.1)
 
