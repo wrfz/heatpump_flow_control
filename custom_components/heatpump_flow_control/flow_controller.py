@@ -103,10 +103,9 @@ class FlowController:
 
         _LOGGER.info("_heizkurve_fallback()")
 
-        max_vorlauf = self.min_vorlauf + (self.max_vorlauf - self.min_vorlauf) // 2
-
-        p0 = TempVorlauf(15.0, self.min_vorlauf)
-        p1 = TempVorlauf(-10.0, max_vorlauf)
+        # Heizkurve: 10°C → 26.4°C bis -15°C → 35°C
+        p0 = TempVorlauf(10.0, 26.4)
+        p1 = TempVorlauf(-15.0, 35.0)
 
         # 1. Die mathematische Gerade (funktioniert immer, solange p0.temp != p1.temp)
         vorlauf = p0.vorlauf + (p1.vorlauf - p0.vorlauf) / (p1.temp - p0.temp) * (aussen_temp - p0.temp)
@@ -191,12 +190,12 @@ class FlowController:
         # Raum-Abweichung
         raum_abweichung = sensor_values.raum_soll - sensor_values.raum_ist
 
-        # Tageszeit als zyklisches Feature
+        # Tageszeit als zyklisches Feature (Default: Mittag)
         stunde = now.hour + now.minute / 60.0
         stunde_sin = math.sin(2 * math.pi * stunde / 24)
         stunde_cos = math.cos(2 * math.pi * stunde / 24)
 
-        # Wochentag als zyklisches Feature
+        # Wochentag als zyklisches Feature (Default: Mittwoch)
         wochentag = now.weekday()
         wochentag_sin = math.sin(2 * math.pi * wochentag / 7)
         wochentag_cos = math.cos(2 * math.pi * wochentag / 7)
@@ -207,10 +206,10 @@ class FlowController:
             raum_soll = sensor_values.raum_soll,
             vorlauf_ist = sensor_values.vorlauf_ist,
             raum_abweichung = raum_abweichung,
-            #aussen_trend_1h=trends["aussen_trend_1h"],
-            #aussen_trend_2h=trends["aussen_trend_2h"],
-            #aussen_trend_3h=trends["aussen_trend_3h"],
-            #aussen_trend_6h=trends["aussen_trend_6h"],
+            aussen_trend_1h=0.0,  # Default: kein Trend
+            aussen_trend_2h=0.0,
+            aussen_trend_3h=0.0,
+            aussen_trend_6h=0.0,
             stunde_sin = stunde_sin,
             stunde_cos = stunde_cos,
             wochentag_sin = wochentag_sin,
@@ -227,21 +226,21 @@ class FlowController:
     ) -> VorlaufSollWeight:
         """Berechnet korrigierten Vorlauf."""
 
-        abweichung = abs(raum_ist_jetzt - erfahrung.raum_soll)
+        # Echte Abweichung (kann positiv oder negativ sein)
+        abweichung = erfahrung.raum_soll - raum_ist_jetzt  # Positiv = zu kalt, Negativ = zu warm
+        abweichung_abs = abs(abweichung)
 
-        if abweichung < 0.3:
-            # War gut!
+        if abweichung_abs < 0.3:
+            # War gut! Temperatur fast perfekt erreicht
             korrigierter_vorlauf = erfahrung.vorlauf_soll
             weight = 1.0
 
-        # War schlecht → Korrigiere
-        elif abweichung < 0:  # Zu kalt
+        elif abweichung > 0:  # Zu kalt -> Vorlauf war zu niedrig
             korrigierter_vorlauf = erfahrung.vorlauf_soll + abweichung * 3.0
             weight = 3.0
 
-        # Zu warm
-        else:
-            korrigierter_vorlauf = erfahrung.vorlauf_soll - abweichung * 2.0
+        else:  # Zu warm -> Vorlauf war zu hoch
+            korrigierter_vorlauf = erfahrung.vorlauf_soll + abweichung * 2.0  # abweichung ist negativ!
             weight = 2.0
 
         _LOGGER.info("_bewerte_erfahrung() korrigierter_vorlauf=%s, weight=%s", korrigierter_vorlauf, weight)
@@ -408,37 +407,56 @@ class FlowController:
             self.use_fallback = False
 
             # Berechne Temperatur-Bereiche aus Heizkurve
-            temp_min = -10.0
-            temp_max = 15.0
+            temp_min = -15.0
+            temp_max = 10.0
 
-            # Raum-Soll Bereich
-            raum_soll_min = 20.0
+            # Raum-Soll Bereich (Schwerpunkt 22.5°C)
+            raum_soll_min = 21.0
             raum_soll_max = 23.0
 
             # Generiere synthetische Trainingsdaten aus Heizkurve
             synthetic_count = 0
-            for t_aussen in range(int(temp_min), int(temp_max) + 1):
-                for raum_soll in [20.0, 20.5, 21.0, 21.5, 22.0, 22.5, 23.0]:
-                    for raum_abweichung in [-2.0, -1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5, 2.0]:
-                        # Berechne Vorlauf-Soll aus Heizkurve
-                        vorlauf_curve = self._heizkurve_fallback(
-                            float(t_aussen), raum_abweichung
-                        )
 
-                        # Trainiere das Modell mit synthetischen Features
-                        synthetic_features = Features(
-                            aussen_temp=float(t_aussen),
-                            raum_ist=raum_soll + raum_abweichung,
-                            raum_soll=raum_soll,
-                            vorlauf_ist=vorlauf_curve,  # Angenommen: Vorlauf erreicht Soll
-                            raum_abweichung=raum_abweichung,
-                        )
+            # Viele Trainingsdurchläufe für präzises Lernen
+            for _ in range(50):
+                for t_aussen in range(int(temp_min), int(temp_max) + 1):
+                    # Schwerpunkt auf 22.5°C legen
+                    for raum_soll in [21.0, 21.5, 22.0, 22.5, 22.5, 23.0]:
+                        # Mehrere raum_abweichungen für robustes Training
+                        for raum_abweichung in [-0.5, 0.0, 0.5]:
+                            # Berechne Vorlauf-Soll aus Heizkurve
+                            vorlauf_curve = self._heizkurve_fallback(
+                                float(t_aussen), raum_abweichung
+                            )
 
-                        self.model.learn_one(
-                            synthetic_features.to_dict(),
-                            vorlauf_curve
-                        )
-                        synthetic_count += 1
+                            # Vorlauf_ist variieren: mal zu niedrig, mal genau richtig, mal zu hoch
+                            for vorlauf_offset in [-2.0, 0.0, 2.0]:
+                                vorlauf_ist_value = vorlauf_curve + vorlauf_offset
+
+                                # Trainiere das Modell mit synthetischen Features
+                                synthetic_features = Features(
+                                    aussen_temp=float(t_aussen),
+                                    raum_ist=raum_soll + raum_abweichung,
+                                    raum_soll=raum_soll,
+                                    vorlauf_ist=vorlauf_ist_value,
+                                    raum_abweichung=raum_abweichung,
+                                    aussen_trend_1h=0.0,  # Keine Trends für synthetische Daten
+                                    aussen_trend_2h=0.0,
+                                    aussen_trend_3h=0.0,
+                                    aussen_trend_6h=0.0,
+                                    stunde_sin=0.0,  # Mittag (12:00 Uhr)
+                                    stunde_cos=1.0,
+                                    wochentag_sin=0.0,  # Mittwoch
+                                    wochentag_cos=1.0,
+                                    temp_diff=float(t_aussen) - (raum_soll + raum_abweichung),
+                                    vorlauf_raum_diff=vorlauf_ist_value - (raum_soll + raum_abweichung),
+                                )
+
+                                self.model.learn_one(
+                                    synthetic_features.to_dict(),
+                                    vorlauf_curve  # Zielwert bleibt die Heizkurve
+                                )
+                                synthetic_count += 1
 
             _LOGGER.info(
                 "Synthetisches Training abgeschlossen: %d Datenpunkte generiert",
@@ -451,15 +469,12 @@ class FlowController:
             self.lerne_aus_features(sensor_values.raum_ist)
 
         _LOGGER.info(
-            "Vorlauf-Soll berechnet: %.1f°C (Außen: %.1f°C, Raum: %.1f/%.1f°C, Trend: [1h: %.2f, 2h: %.2f, 3h: %.2f, 6h: %.2f])",
+            "Vorlauf-Soll berechnet: %.1f°C (Außen: %.1f°C, Raum: %.1f/%.1f°C, Vorlauf-Ist: %.1f°C)",
             vorlauf_soll,
             sensor_values.aussen_temp,
             sensor_values.raum_ist,
             sensor_values.raum_soll,
-            features.aussen_trend_1h,
-            features.aussen_trend_2h,
-            features.aussen_trend_3h,
-            features.aussen_trend_6h,
+            sensor_values.vorlauf_ist,
         )
 
         _LOGGER.info(
