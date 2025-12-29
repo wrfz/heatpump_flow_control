@@ -302,12 +302,14 @@ class FlowController:
             except Exception as e:
                 _LOGGER.error("Fehler beim Lernen aus Feature: %s", e)
 
-        # Cleanup: Entferne sehr alte Erfahrungen (älter als 7 Tage)
+        # Cleanup: Entferne gelernte und sehr alte Erfahrungen
+        # - Gelernte Erfahrungen werden nicht mehr benötigt
+        # - Sehr alte ungelernte Erfahrungen (älter als 7 Tage) ebenfalls entfernen
         max_age_days = 7
         cutoff_cleanup = now - timedelta(days=max_age_days)
         self.erfahrungs_liste = [
             e for e in self.erfahrungs_liste
-            if e.timestamp > cutoff_cleanup
+            if not e.gelernt and e.timestamp > cutoff_cleanup
         ]
 
         if stats["gelernt"] > 0:
@@ -341,10 +343,7 @@ class FlowController:
         features = self._erstelle_features(sensor_values)
 
         # Während Kaltstart: Heizkurve verwenden
-        if (
-            self.use_fallback
-            and self.predictions_count < self.min_predictions_for_model
-        ):
+        if self.use_fallback:
             vorlauf_soll = self._heizkurve_fallback(
                 sensor_values.aussen_temp, features.raum_abweichung
             )
@@ -354,14 +353,18 @@ class FlowController:
                 self.min_predictions_for_model,
                 vorlauf_soll,
             )
-
-            if self.predictions_count >= 10:
-                _LOGGER.info("Wechsel von Heizkurve zu Model-Modus")
-                self.use_fallback = False
         else:
             # Model verwenden
             try:
-                vorlauf_soll = self.model.predict_one(features.to_dict())
+                raw_prediction = self.model.predict_one(features.to_dict())
+                _LOGGER.info(
+                    "Model-Prediction (roh): %.2f°C (Features: aussen=%.1f, raum_abw=%.2f, vorlauf_ist=%.1f)",
+                    raw_prediction,
+                    sensor_values.aussen_temp,
+                    features.raum_abweichung,
+                    sensor_values.vorlauf_ist,
+                )
+                vorlauf_soll = raw_prediction
 
                 if vorlauf_soll > 1000 or vorlauf_soll < -1000:
                     _LOGGER.warning(
@@ -381,9 +384,6 @@ class FlowController:
 
         self.predictions_count += 1
 
-        if self.predictions_count >= self.min_predictions_for_model:
-            self.use_fallback = False
-
         # Speichere Features für zeitversetztes Lernen (in 4h)
         erfahrung = Erfahrung(
             timestamp=datetime.now(),
@@ -395,8 +395,60 @@ class FlowController:
         )
         self.erfahrungs_liste.append(erfahrung)
 
-        # Lerne aus Features die 4h alt sind (intern)
-        self.lerne_aus_features(sensor_values.raum_ist)
+        # Beim Übergang vom Fallback zum Model-Modus:
+        # Trainiere das Model initial mit synthetischen Daten aus der Heizkurve
+        if (
+            self.use_fallback
+            and self.predictions_count >= self.min_predictions_for_model
+        ):
+            _LOGGER.info(
+                "Übergang von Fallback zu Model-Modus. Starte synthetisches Training mit %d Fallback-Erfahrungen",
+                len(self.erfahrungs_liste),
+            )
+            self.use_fallback = False
+
+            # Berechne Temperatur-Bereiche aus Heizkurve
+            temp_min = -10.0
+            temp_max = 15.0
+
+            # Raum-Soll Bereich
+            raum_soll_min = 20.0
+            raum_soll_max = 23.0
+
+            # Generiere synthetische Trainingsdaten aus Heizkurve
+            synthetic_count = 0
+            for t_aussen in range(int(temp_min), int(temp_max) + 1):
+                for raum_soll in [20.0, 20.5, 21.0, 21.5, 22.0, 22.5, 23.0]:
+                    for raum_abweichung in [-2.0, -1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5, 2.0]:
+                        # Berechne Vorlauf-Soll aus Heizkurve
+                        vorlauf_curve = self._heizkurve_fallback(
+                            float(t_aussen), raum_abweichung
+                        )
+
+                        # Trainiere das Modell mit synthetischen Features
+                        synthetic_features = Features(
+                            aussen_temp=float(t_aussen),
+                            raum_ist=raum_soll + raum_abweichung,
+                            raum_soll=raum_soll,
+                            vorlauf_ist=vorlauf_curve,  # Angenommen: Vorlauf erreicht Soll
+                            raum_abweichung=raum_abweichung,
+                        )
+
+                        self.model.learn_one(
+                            synthetic_features.to_dict(),
+                            vorlauf_curve
+                        )
+                        synthetic_count += 1
+
+            _LOGGER.info(
+                "Synthetisches Training abgeschlossen: %d Datenpunkte generiert",
+                synthetic_count,
+            )
+            _LOGGER.info("Wechsel von Heizkurve zu Model-Modus abgeschlossen")
+
+        # Lerne aus Features die 4h alt sind (intern) - nur wenn bereits im Model-Modus
+        if not self.use_fallback:
+            self.lerne_aus_features(sensor_values.raum_ist)
 
         _LOGGER.info(
             "Vorlauf-Soll berechnet: %.1f°C (Außen: %.1f°C, Raum: %.1f/%.1f°C, Trend: [1h: %.2f, 2h: %.2f, 3h: %.2f, 6h: %.2f])",
