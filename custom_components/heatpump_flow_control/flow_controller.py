@@ -27,6 +27,12 @@ _LOGGER = logging.getLogger(__name__)
 # Erhöhe diese Zahl bei inkompatiblen Code-Änderungen
 PICKLE_VERSION = 2
 
+# Gewichtung für synthetische Trainingsdaten
+# Niedrigerer Wert = echte Daten haben stärkeren Einfluss
+# Mit 0.001: Echte Daten dominieren (>80%) nach ~3 Tagen
+# Berechnung: 3 Tage × 48 pred/Tag × 2.0 weight = 288 vs 70.200 × 0.001 = 70
+SYNTHETIC_WEIGHT = 0.001
+
 
 class FlowController:
     """Flow Controller für Vorlauf-Temperatur Regelung."""
@@ -177,13 +183,15 @@ class FlowController:
 
                             self.model.learn_one(
                                 synthetic_features.to_dict(),
-                                vorlauf_curve
+                                vorlauf_curve,
+                                sample_weight=SYNTHETIC_WEIGHT  # Schwächere Gewichtung für schnelle Anpassung
                             )
                             synthetic_count += 1
 
         _LOGGER.info(
-            "Synthetisches Training abgeschlossen: %d Datenpunkte generiert",
+            "Synthetisches Training abgeschlossen: %d Datenpunkte (weight=%.1f)",
             synthetic_count,
+            SYNTHETIC_WEIGHT,
         )
 
     def _berechne_trends(self) -> dict[str, float]:
