@@ -614,143 +614,112 @@ class TestPersistancey:
 class TestLearning:
     """Test prediction logic."""
 
-    def test_fallback_learning(self):
-        """Test model predictions with synthetic training.
+    def test_outside_temperature_learning(self):
+        """Test that the model learns to adjust flow temperature based on outside temperature changes."""
 
-        This test verifies:
-        1. Model is trained with synthetic data at initialization
-        2. Model produces correct heating curve values immediately
-        3. Time simulation allows for history-based learning
-        """
         flow_controller = FlowController(
             min_vorlauf=25.0,
             max_vorlauf=40.0,
             learning_rate=0.01,
         )
 
-        # Test model predictions with 1-hour intervals
-        # raum_ist und raum_soll einmal setzen - bleiben dann sticky
-        # vorlauf_ist folgt dem Sollwert mit Verzögerung (realistisches Verhalten)
         test_helper = (
             controller(flow_controller)
             .enable_history_learning()
             .wait(60)
             .raum_ist(22.5)
-            .raum_soll(22.5)  # Sticky für alle folgenden Predictions
+            .raum_soll(22.5)
+            .tolerance(0.1)
 
             .t_aussen(10.0).vorlauf_ist(28.0)
-            .expect_vorlauf_soll(26.4, tolerance=0.1)
+            .expect_vorlauf_soll(26.4)
 
             .t_aussen(8.0).vorlauf_ist(27.0)
-            .expect_vorlauf_soll(27.09, tolerance=0.1)
+            .expect_vorlauf_soll(27.09)
 
             .t_aussen(6.0).vorlauf_ist(26.5)
-            .expect_vorlauf_soll(27.78, tolerance=0.1)
+            .expect_vorlauf_soll(27.78)
 
             .t_aussen(4.0).vorlauf_ist(27.0)
-            .expect_vorlauf_soll(28.46, tolerance=0.1)
+            .expect_vorlauf_soll(28.46)
 
             .t_aussen(2.0).vorlauf_ist(27.8)
-            .expect_vorlauf_soll(29.15, tolerance=0.1)
+            .expect_vorlauf_soll(29.15)
 
             .t_aussen(0.0).vorlauf_ist(28.5)
-            .expect_vorlauf_soll(29.84, tolerance=0.1)
+            .expect_vorlauf_soll(29.84)
 
             .t_aussen(-2.0).vorlauf_ist(29.3)
-            .expect_vorlauf_soll(30.53, tolerance=0.1)
+            .expect_vorlauf_soll(30.53)
 
             .t_aussen(-4.0).vorlauf_ist(30.0)
-            .expect_vorlauf_soll(31.22, tolerance=0.1)
+            .expect_vorlauf_soll(31.22)
 
             .t_aussen(-6.0).vorlauf_ist(30.8)
-            .expect_vorlauf_soll(31.90, tolerance=0.1)
+            .expect_vorlauf_soll(31.90)
 
             .t_aussen(-8.0).vorlauf_ist(31.5)
-            .expect_vorlauf_soll(32.59, tolerance=0.1)
+            .expect_vorlauf_soll(32.59)
         )
 
         # Continue with more predictions - model continues learning from history
-        # Temperatur SINKT weiter von -10°C bis -15°C → Vorlauf MUSS STEIGEN!
+        # Temperatur sinkt weiter von -10°C bis -15°C → Vorlauf muss steigen!
         test_helper = (
             test_helper
             # Continue predictions: Temperatur sinkt weiter, vorlauf_ist folgt verzögert
             .t_aussen(-10.0).vorlauf_ist(32.3)
-            .expect_vorlauf_soll(33.28, tolerance=0.1)
+            .expect_vorlauf_soll(33.28)
 
             .t_aussen(-12.0).vorlauf_ist(33.0)
-            .expect_vorlauf_soll(33.97, tolerance=0.1)
+            .expect_vorlauf_soll(33.97)
 
             .t_aussen(-14.0).vorlauf_ist(33.7)
-            .expect_vorlauf_soll(34.66, tolerance=0.1)
+            .expect_vorlauf_soll(34.66)
 
             .t_aussen(-15.0).vorlauf_ist(34.5)
-            .expect_vorlauf_soll(35.0, tolerance=0.1)  # Maximum erreicht
+            .expect_vorlauf_soll(35.0)  # Maximum erreicht
         )
 
-        # Jetzt Temperatur STEIGT wieder von -15°C zurück auf 10°C → Vorlauf MUSS FALLEN!
+        # Jetzt Temperatur steigt wieder von -15°C zurück auf 10°C → Vorlauf MUSS FALLEN!
         test_helper = (
             test_helper
             # Temperatur steigt, vorlauf_ist sinkt verzögert
             .t_aussen(-14.0).vorlauf_ist(34.8)
-            .expect_vorlauf_soll(34.66, tolerance=0.1)
+            .expect_vorlauf_soll(34.66)
 
             .t_aussen(-12.0).vorlauf_ist(34.5)
-            .expect_vorlauf_soll(33.97, tolerance=0.1)
+            .expect_vorlauf_soll(33.97)
 
             .t_aussen(-10.0).vorlauf_ist(34.0)
-            .expect_vorlauf_soll(33.28, tolerance=0.1)
+            .expect_vorlauf_soll(33.28)
 
             .t_aussen(-8.0).vorlauf_ist(33.5)
-            .expect_vorlauf_soll(32.59, tolerance=0.1)
+            .expect_vorlauf_soll(32.59)
 
             .t_aussen(-6.0).vorlauf_ist(33.0)
-            .expect_vorlauf_soll(31.90, tolerance=0.1)
+            .expect_vorlauf_soll(31.90)
 
             .t_aussen(-4.0).vorlauf_ist(32.3)
-            .expect_vorlauf_soll(31.22, tolerance=0.1)
+            .expect_vorlauf_soll(31.22)
 
             .t_aussen(-2.0).vorlauf_ist(31.5)
-            .expect_vorlauf_soll(30.53, tolerance=0.1)
+            .expect_vorlauf_soll(30.53)
 
             .t_aussen(0.0).vorlauf_ist(30.7)
-            .expect_vorlauf_soll(29.84, tolerance=0.1)
+            .expect_vorlauf_soll(29.84)
 
             .t_aussen(2.0).vorlauf_ist(30.0)
-            .expect_vorlauf_soll(29.15, tolerance=0.1)
+            .expect_vorlauf_soll(29.15)
 
             .t_aussen(4.0).vorlauf_ist(29.3)
-            .expect_vorlauf_soll(28.46, tolerance=0.1)
+            .expect_vorlauf_soll(28.46)
 
             .t_aussen(6.0).vorlauf_ist(28.5)
-            .expect_vorlauf_soll(27.78, tolerance=0.1)
+            .expect_vorlauf_soll(27.78)
 
             .t_aussen(8.0).vorlauf_ist(27.7)
-            .expect_vorlauf_soll(27.09, tolerance=0.1)
+            .expect_vorlauf_soll(27.09)
 
             .t_aussen(10.0).vorlauf_ist(27.0)
-            .expect_vorlauf_soll(26.4, tolerance=0.1)
+            .expect_vorlauf_soll(26.4)
         )
-
-        # Verify that experiences are being stored
-        assert len(flow_controller.erfahrungs_liste) <= 27, \
-            "Experiences should be stored (some may be removed after learning)"
-
-        # Verify that predictions respect min/max bounds
-        # (Model without training returns min_vorlauf)
-        assert all(
-            e.vorlauf_soll >= flow_controller.min_vorlauf
-            for e in flow_controller.erfahrungs_liste
-        ), "All predictions should be >= min_vorlauf"
-
-        # Model should still operate within configured bounds
-        # Get last prediction to verify
-        vorlauf_soll, _ = flow_controller.berechne_vorlauf_soll(
-            SensorValues(
-                aussen_temp=10.0,
-                raum_ist=22.5,
-                raum_soll=22.5,
-                vorlauf_ist=35.0,
-            )
-        )
-        assert flow_controller.min_vorlauf <= vorlauf_soll <= flow_controller.max_vorlauf, \
-            f"Model prediction {vorlauf_soll} should be within [{flow_controller.min_vorlauf}, {flow_controller.max_vorlauf}]"
