@@ -1,6 +1,8 @@
 """Unit tests for FlowController learning and prediction logic."""
 
 from datetime import datetime, timedelta
+import io
+import pickle
 from unittest.mock import patch
 
 from custom_components.heatpump_flow_control.flow_controller import (
@@ -798,3 +800,34 @@ class TestFlowCalculation:
             .vorlauf_ist(29.0).raum_ist(21.0).expect_vorlauf_soll(36.3)
             .vorlauf_ist(28.5).raum_ist(21.0).expect_vorlauf_soll(36.3)
         )
+
+class TestPersistancey:
+    """Test persistency of the flow controller."""
+
+    def test_persistancy(self):
+        """Test that the FlowController can be pickled and unpickled."""
+
+        controller = FlowController(
+            min_vorlauf=25.0,
+            max_vorlauf=40.0,
+            learning_rate=0.01,
+            trend_history_size=12
+        )
+
+        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=0.0, raum_ist=22.0, raum_soll=22.0, vorlauf_ist=35.0))[0] == pytest.approx(29.2)
+        assert controller.predictions_count == 1
+
+        stream = io.BytesIO()
+        pickle.dump(controller, stream)
+        binary_data = stream.getvalue()
+
+        stream = io.BytesIO(binary_data)
+        stream.seek(0)
+        controller2 = pickle.load(stream)
+
+        assert controller2.predictions_count == 1
+
+        assert controller2.berechne_vorlauf_soll(SensorValues(aussen_temp=10.0, raum_ist=22.0, raum_soll=22.0, vorlauf_ist=35.0))[0] == pytest.approx(26.4)
+        assert controller2.predictions_count == 2
+
+        assert controller.predictions_count == 1
