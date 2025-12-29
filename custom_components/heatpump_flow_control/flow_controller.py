@@ -44,6 +44,10 @@ class FlowController:
         self.use_fallback = True
         self.predictions_count = 0
 
+        # Feature-Liste für zeitversetztes Lernen (statt HA DB)
+        self.erfahrungs_liste: list[Erfahrung] = []  # Speichert alle Predictions mit Features
+        self.min_reward_hours = 4.0  # Lernen aus Features die 4h alt sind
+
         self._setup()
 
     def _setup(
@@ -120,6 +124,19 @@ class FlowController:
 
         return vorlauf
 
+    def _berechne_trends(self) -> dict[str, float]:
+        """Berechnet zeitnormierte Temperatur-Trends in °C/Stunde.
+
+        Returns:
+            Dict mit Trend-Werten (°C/Stunde)
+        """
+        return {
+            "aussen_trend_1h": self.aussen_temp_history.get_trend(hours=1.0),
+            "aussen_trend_2h": self.aussen_temp_history.get_trend(hours=2.0),
+            "aussen_trend_3h": self.aussen_temp_history.get_trend(hours=3.0),
+            "aussen_trend_6h": self.aussen_temp_history.get_trend(hours=6.0),
+        }
+
     def _erstelle_features(
         self,
         sensor_values: SensorValues,
@@ -168,6 +185,9 @@ class FlowController:
                 while history and history[0].timestamp < cutoff_longterm:
                     history.popleft()
 
+        # Berechne Trends
+        #trends = self._berechne_trends()
+
         # Raum-Abweichung
         raum_abweichung = sensor_values.raum_soll - sensor_values.raum_ist
 
@@ -187,6 +207,10 @@ class FlowController:
             raum_soll = sensor_values.raum_soll,
             vorlauf_ist = sensor_values.vorlauf_ist,
             raum_abweichung = raum_abweichung,
+            #aussen_trend_1h=trends["aussen_trend_1h"],
+            #aussen_trend_2h=trends["aussen_trend_2h"],
+            #aussen_trend_3h=trends["aussen_trend_3h"],
+            #aussen_trend_6h=trends["aussen_trend_6h"],
             stunde_sin = stunde_sin,
             stunde_cos = stunde_cos,
             wochentag_sin = wochentag_sin,
@@ -224,81 +248,77 @@ class FlowController:
 
         return VorlaufSollWeight(vorlauf_soll=korrigierter_vorlauf, weight=weight)
 
-    def lerne_aus_history(
-        self,
-        historical_state: dict[str, Any],
-        current_raum_ist: float,
-    ) -> bool:
-        """Lernt aus einem historischen HA-Sensor-Zustand."""
+    def lerne_aus_features(self, current_raum_ist: float) -> dict[str, int]:
+        """Lernt aus Features die vor 4h gespeichert wurden.
 
-        try:
-            # Extrahiere Sensor-Werte vom damaligen Zeitpunkt
-            timestamp = historical_state['timestamp']
-            aussen_temp = historical_state['aussen_temp']
-            raum_ist = historical_state['raum_ist']
-            raum_soll = historical_state['raum_soll']
-            vorlauf_ist = historical_state['vorlauf_ist']
-            vorlauf_soll = historical_state['vorlauf_soll']
+        Args:
+            current_raum_ist: Aktuelle Raumtemperatur (für Bewertung)
 
-            # Rekonstruiere Features vom damaligen Zeitpunkt
-            raum_abweichung = raum_soll - raum_ist
-            stunde = timestamp.hour + timestamp.minute / 60.0
-            stunde_sin = math.sin(2 * math.pi * stunde / 24)
-            stunde_cos = math.cos(2 * math.pi * stunde / 24)
-            wochentag = timestamp.weekday()
-            wochentag_sin = math.sin(2 * math.pi * wochentag / 7)
-            wochentag_cos = math.cos(2 * math.pi * wochentag / 7)
+        Returns:
+            Statistiken über das Lernen
+        """
+        stats = {"gelernt": 0, "uebersprungen": 0}
 
-            features = Features(
-                aussen_temp=aussen_temp,
-                raum_ist=raum_ist,
-                raum_soll=raum_soll,
-                vorlauf_ist=vorlauf_ist,
-                raum_abweichung=raum_abweichung,
-                # Trends können wir nicht rekonstruieren - setze auf 0
-                aussen_trend_1h=0.0,
-                aussen_trend_2h=0.0,
-                aussen_trend_3h=0.0,
-                aussen_trend_6h=0.0,
-                stunde_sin=stunde_sin,
-                stunde_cos=stunde_cos,
-                wochentag_sin=wochentag_sin,
-                wochentag_cos=wochentag_cos,
-                # Interaktions-Features | werden durch Gewichtungen im Model berücksichtigt
-                temp_diff=aussen_temp - raum_ist,   # Model muss lernen: "5°C draußen UND 22°C drin → Differenz = -17°C"
-                vorlauf_raum_diff=vorlauf_ist - raum_ist,   # Wie viel wärmer ist Vorlauf?
+        now = datetime.now()
+        cutoff_time = now - timedelta(hours=self.min_reward_hours)
+
+        # Finde Erfahrungen die alt genug sind (4h) und noch nicht gelernt wurden
+        for erfahrung in self.erfahrungs_liste:
+            if erfahrung.gelernt:
+                continue
+
+            # Prüfe ob Erfahrung alt genug ist (4h)
+            age_hours = (now - erfahrung.timestamp).total_seconds() / 3600
+
+            if age_hours < self.min_reward_hours:
+                stats["uebersprungen"] += 1
+                continue
+
+            # Bewerte Erfahrung mit aktueller Raumtemperatur
+            try:
+                korrigierter_vorlauf_weight = self._bewerte_erfahrung(
+                    erfahrung=erfahrung,
+                    raum_ist_jetzt=current_raum_ist
+                )
+
+                # Lerne mit korrigiertem Vorlauf
+                self.model.learn_one(
+                    erfahrung.features.to_dict(),
+                    korrigierter_vorlauf_weight.vorlauf_soll,
+                    sample_weight=korrigierter_vorlauf_weight.weight,
+                )
+
+                erfahrung.gelernt = True
+                stats["gelernt"] += 1
+
+                _LOGGER.info(
+                    "✓ Gelernt aus Erfahrung von vor %.1fh: Vorlauf %.1f°C → %.1f°C (weight=%.1f)",
+                    age_hours,
+                    erfahrung.vorlauf_soll,
+                    korrigierter_vorlauf_weight.vorlauf_soll,
+                    korrigierter_vorlauf_weight.weight,
+                )
+
+            except Exception as e:
+                _LOGGER.error("Fehler beim Lernen aus Feature: %s", e)
+
+        # Cleanup: Entferne sehr alte Erfahrungen (älter als 7 Tage)
+        max_age_days = 7
+        cutoff_cleanup = now - timedelta(days=max_age_days)
+        self.erfahrungs_liste = [
+            e for e in self.erfahrungs_liste
+            if e.timestamp > cutoff_cleanup
+        ]
+
+        if stats["gelernt"] > 0:
+            _LOGGER.info(
+                "Feature-Lernen abgeschlossen: %d gelernt, %d übersprungen, %d in Liste",
+                stats["gelernt"],
+                stats["uebersprungen"],
+                len(self.erfahrungs_liste),
             )
 
-            # Erstelle Erfahrung für Bewertung
-            erfahrung = Erfahrung(
-                timestamp=timestamp,
-                features=features,
-                vorlauf_soll=vorlauf_soll,
-                raum_ist_vorher=raum_ist,
-                raum_soll=raum_soll,
-                gelernt=False,
-            )
-
-            # Bewerte mit Raum-Ist von 2-6h SPÄTER
-            korrigierter_vorlauf_weight = self._bewerte_erfahrung(
-                erfahrung=erfahrung, raum_ist_jetzt=current_raum_ist
-            )
-
-            _LOGGER.info("lerne_aus_history() features=%s", features)
-
-            self.model.learn_one(
-                features.to_dict(),
-                korrigierter_vorlauf_weight.vorlauf_soll,
-                sample_weight=korrigierter_vorlauf_weight.weight,
-            )
-
-        except Exception as e:
-            _LOGGER.error("Fehler beim History-Learning: %s", e)
-            return False
-
-        else:
-            _LOGGER.info("Lernen aus History erfolgreich")
-            return True
+        return stats
 
     def berechne_vorlauf_soll(
         self,
@@ -317,9 +337,6 @@ class FlowController:
         """
 
         _LOGGER.info("berechne_vorlauf_soll()")
-
-        # Flag um zu tracken ob Model in dieser Berechnung zurückgesetzt wurde
-        model_was_reset = False
 
         features = self._erstelle_features(sensor_values)
 
@@ -346,34 +363,12 @@ class FlowController:
             try:
                 vorlauf_soll = self.model.predict_one(features.to_dict())
 
-                # Sanity check: Falls Model unrealistische Werte liefert
-                if vorlauf_soll < 15 or vorlauf_soll > 70:
+                if vorlauf_soll > 1000 or vorlauf_soll < -1000:
                     _LOGGER.warning(
                         "Model liefert unrealistischen Wert %.1f°C (Features: %s), verwende Heizkurve",
                         vorlauf_soll,
                         {k: round(v, 3) for k, v in features.items()},
                     )
-
-                    # Bei extrem unrealistischen Werten: Model ist korrupt, zurücksetzen
-                    if abs(vorlauf_soll) > 1000:
-                        _LOGGER.error(
-                            "Model-Output extrem unrealistisch (%.0f°C), setze Model zurück",
-                            vorlauf_soll,
-                        )
-                        # Model komplett neu initialisieren
-                        self._setup(
-                            force_fallback=True,  # Erzwinge Fallback nach Reset
-                        )
-                        self.predictions_count = 0
-                        # Diese Vorhersage war ungültig, zählt nicht mit
-                        model_was_reset = True
-
-                    vorlauf_soll = self._heizkurve_fallback(
-                        sensor_values.aussen_temp, features.raum_abweichung
-                    )
-                elif self.use_fallback:
-                    _LOGGER.info("Wechsel von Heizkurve zu ML-Model")
-                    self.use_fallback = False
 
             except Exception as e:
                 _LOGGER.error("Fehler bei Model-Prediction: %s", e)
@@ -384,16 +379,24 @@ class FlowController:
         # Begrenzung auf konfigurierten Bereich
         vorlauf_soll = max(self.min_vorlauf, min(self.max_vorlauf, vorlauf_soll))
 
-        # Nur inkrementieren wenn Model nicht gerade zurückgesetzt wurde
-        if not model_was_reset:
-            self.predictions_count += 1
-
+        self.predictions_count += 1
 
         if self.predictions_count >= self.min_predictions_for_model:
             self.use_fallback = False
 
-        # History-basiertes Lernen wird von number.py über lerne_aus_history() aufgerufen
-        # (Nicht mehr hier, da wir Zugriff auf HA-History brauchen)
+        # Speichere Features für zeitversetztes Lernen (in 4h)
+        erfahrung = Erfahrung(
+            timestamp=datetime.now(),
+            features=features,
+            vorlauf_soll=vorlauf_soll,
+            raum_ist_vorher=sensor_values.raum_ist,
+            raum_soll=sensor_values.raum_soll,
+            gelernt=False,
+        )
+        self.erfahrungs_liste.append(erfahrung)
+
+        # Lerne aus Features die 4h alt sind (intern)
+        self.lerne_aus_features(sensor_values.raum_ist)
 
         _LOGGER.info(
             "Vorlauf-Soll berechnet: %.1f°C (Außen: %.1f°C, Raum: %.1f/%.1f°C, Trend: [1h: %.2f, 2h: %.2f, 3h: %.2f, 6h: %.2f])",
@@ -417,15 +420,18 @@ class FlowController:
 
     def get_model_statistics(self) -> ModelStats:
         """Gibt Model-Statistiken zurück."""
-        # History-basiertes Lernen: Stats kommen direkt aus HA-History
+        # Feature-basiertes Lernen
+        gelernt = sum(1 for e in self.erfahrungs_liste if e.gelernt)
+        wartend = sum(1 for e in self.erfahrungs_liste if not e.gelernt)
+
         return ModelStats(
             mae = self.metric.get() if self.predictions_count > 0 else 0.0,
             predictions_count = self.predictions_count,
             use_fallback = self.use_fallback,
             history_size = len(self.aussen_temp_history),
-            erfahrungen_total = 0,  # Nicht mehr relevant
-            erfahrungen_gelernt = 0,  # Wird in number.py gezählt
-            erfahrungen_wartend = 0,  # Nicht mehr relevant
+            erfahrungen_total = len(self.erfahrungs_liste),
+            erfahrungen_gelernt = gelernt,
+            erfahrungen_wartend = wartend,
         )
 
     def reset_model(self) -> None:
