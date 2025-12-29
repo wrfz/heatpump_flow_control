@@ -57,7 +57,7 @@ from .const import (
     DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
 )
-from .flow_controller import FlowController
+from .flow_controller import FlowController, PICKLE_VERSION
 from .types import SensorValues
 
 # pylint: disable=hass-logger-capital, hass-logger-period
@@ -258,11 +258,39 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
             try:
                 with self._model_path.open("rb") as f:
                     loaded = pickle.load(f)
+
+                    # Prüfe pickle Version für Migrations-Check
+                    loaded_version = getattr(loaded, "pickle_version", 1)
+                    if loaded_version < PICKLE_VERSION:
+                        _LOGGER.warning(
+                            "Model version mismatch (loaded: %d, current: %d). "
+                            "Starting fresh to ensure compatibility.",
+                            loaded_version,
+                            PICKLE_VERSION,
+                        )
+                        return None
+
+                    # Migrationscode für fehlende Attribute (falls Version gleich)
+                    if not hasattr(loaded, "use_fallback"):
+                        _LOGGER.info("Migrating: Adding use_fallback attribute")
+                        loaded.use_fallback = False
+
+                    # Legacy-Patches für alte Modelle
                     loaded.use_fallback = False
                     loaded.min_predictions_for_model = 0
+
+                    _LOGGER.info(
+                        "Model loaded successfully (version %d, predictions: %d)",
+                        loaded_version,
+                        loaded.predictions_count,
+                    )
                     return loaded
             except (pickle.UnpicklingError, EOFError, AttributeError) as err:
-                _LOGGER.error("Corrupted model found, starting fresh: %s", err)
+                _LOGGER.error(
+                    "Cannot load model (incompatible format or missing attributes): %s. "
+                    "Starting fresh.",
+                    err,
+                )
                 return None
 
         loaded_controller = await self.hass.async_add_executor_job(_load)

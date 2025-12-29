@@ -23,9 +23,16 @@ from .types import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Pickle-Format Version für Migration
+# Erhöhe diese Zahl bei inkompatiblen Code-Änderungen
+PICKLE_VERSION = 2
+
 
 class FlowController:
     """Flow Controller für Vorlauf-Temperatur Regelung."""
+
+    # Pickle-Version für Migrations-Check
+    pickle_version: int = PICKLE_VERSION
 
     def __init__(
         self,
@@ -41,6 +48,7 @@ class FlowController:
         self.learning_rate = learning_rate
         self.trend_history_size = trend_history_size
 
+        self.pickle_version = PICKLE_VERSION  # Für Migrations-Check
         self.use_fallback = False  # Kein Fallback - Model wird sofort mit synthetischen Daten trainiert
         self.predictions_count = 0
 
