@@ -2,11 +2,18 @@
 
 from collections import deque
 from collections.abc import Iterator
-from dataclasses import asdict, dataclass, fields, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta
 from itertools import islice
 from typing import Any
 
+
+@dataclass
+class TempVorlauf:
+    """Temperatur und Vorlauf Paar."""
+
+    temp: float
+    vorlauf: float
 
 @dataclass
 class DateTimeTemperatur:

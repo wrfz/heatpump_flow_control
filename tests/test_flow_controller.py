@@ -11,6 +11,7 @@ from custom_components.heatpump_flow_control.flow_controller import (
     HistoryBuffer,
     SensorValues,
 )
+import pytest
 
 
 class TestFlowControllerInit:
@@ -176,26 +177,44 @@ class TestPrediction:
     def test_fallback_heizkurve(self):
         """Test fallback heating curve calculation."""
         controller = FlowController(
-            min_vorlauf=18.0,
-            max_vorlauf=39.0,
+            min_vorlauf=25.0,
+            max_vorlauf=40.0,
             learning_rate=0.01,
             trend_history_size=12
         )
 
-        # Cold outside, room too cold
-        vorlauf = controller._heizkurve_fallback(
-            aussen_temp=-5.0,
-            raum_abweichung=2.0,  # 2 degrees too cold
-        )
+        assert controller.use_fallback
 
-        # Should be high
-        assert vorlauf > 35.0
+        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=-20.0, raum_ist=22.0, raum_soll=22.0, vorlauf_ist=35.0))[0] == pytest.approx(32)
+        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=-10.0, raum_ist=22.0, raum_soll=22.0, vorlauf_ist=35.0))[0] == pytest.approx(32)
+        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=0.0, raum_ist=22.0, raum_soll=22.0, vorlauf_ist=35.0))[0] == pytest.approx(29.2)
+        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=10.0, raum_ist=22.0, raum_soll=22.0, vorlauf_ist=35.0))[0] == pytest.approx(26.4)
+        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=15.0, raum_ist=22.0, raum_soll=22.0, vorlauf_ist=35.0))[0] == pytest.approx(25)
+        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=20.0, raum_ist=22.0, raum_soll=22.0, vorlauf_ist=35.0))[0] == pytest.approx(25)
 
-        # Warm outside, room ok
-        vorlauf = controller._heizkurve_fallback(aussen_temp=15.0, raum_abweichung=0.0)
+        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=-20.0, raum_ist=22.0, raum_soll=21.0, vorlauf_ist=35.0))[0] == pytest.approx(32)
+        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=-10.0, raum_ist=22.0, raum_soll=21.0, vorlauf_ist=35.0))[0] == pytest.approx(30)
+        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=0.0, raum_ist=22.0, raum_soll=21.0, vorlauf_ist=35.0))[0] == pytest.approx(27.2)
 
-        # Should be low
-        assert vorlauf < 30.0
+        assert controller.use_fallback
+
+        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=10.0, raum_ist=22.0, raum_soll=21.0, vorlauf_ist=35.0))[0] == pytest.approx(25)
+
+        assert not controller.use_fallback
+
+        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=15.0, raum_ist=22.0, raum_soll=21.0, vorlauf_ist=35.0))[0] == pytest.approx(25)
+        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=20.0, raum_ist=22.0, raum_soll=21.0, vorlauf_ist=35.0))[0] == pytest.approx(25)
+
+        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=-20.0, raum_ist=21.0, raum_soll=22.0, vorlauf_ist=35.0))[0] == pytest.approx(32)
+        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=-10.0, raum_ist=21.0, raum_soll=22.0, vorlauf_ist=35.0))[0] == pytest.approx(32)
+        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=0.0, raum_ist=21.0, raum_soll=22.0, vorlauf_ist=35.0))[0] == pytest.approx(31.2)
+        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=10.0, raum_ist=21.0, raum_soll=22.0, vorlauf_ist=35.0))[0] == pytest.approx(28.4)
+        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=15.0, raum_ist=21.0, raum_soll=22.0, vorlauf_ist=35.0))[0] == pytest.approx(27)
+        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=20.0, raum_ist=21.0, raum_soll=22.0, vorlauf_ist=35.0))[0] == pytest.approx(25.6)
+
+        assert controller.predictions_count == 18
+
+        assert not controller.use_fallback
 
     def test_berechne_vorlauf_soll_fallback_mode(self):
         """Test calculation in fallback mode."""
@@ -486,6 +505,8 @@ class FlowTestHelper:
         self._datetime_patcher = None
         self._pending_wait_minutes = 0  # Minutes to advance on next expect_vorlauf_soll()
         self._default_tolerance = 0.5  # Default tolerance for expect_vorlauf_soll()
+        self._history_states = []  # Store states for optional history learning
+        self._enable_history_learning = False  # Default: disabled for backward compatibility
 
     def _get_mocked_now(self):
         """Return the current simulated datetime."""
@@ -565,6 +586,21 @@ class FlowTestHelper:
                 (self._simulated_datetime, self._raum_ist)
             )
 
+            # Store state for optional history learning
+            self._history_states.append({
+                'timestamp': self._simulated_datetime,
+                'minutes_ago': self._current_time,
+                'aussen_temp': self._t_aussen,
+                'raum_ist': self._raum_ist,
+                'raum_soll': self._raum_soll,
+                'vorlauf_ist': self._vorlauf_ist,
+                'vorlauf_soll': vorlauf_soll,
+                'learned': False,
+            })
+
+            # Optionally learn from history (simulates number.py behavior)
+            self._maybe_learn_from_history()
+
         assert abs(vorlauf_soll - expected) <= tolerance, (
             f"Expected vorlauf_soll ~{expected}°C (±{tolerance}°C), "
             f"got {vorlauf_soll:.1f}°C at time={self._current_time}min, "
@@ -584,6 +620,77 @@ class FlowTestHelper:
         """
         self._pending_wait_minutes = minutes
         return self
+
+    def enable_history_learning(self) -> "FlowTestHelper":
+        """Enable history-based learning in tests.
+
+        When enabled, the test helper will:
+        1. Store all states from expect_vorlauf_soll() calls
+        2. Create fake historical_state dicts
+        3. Call controller.lerne_aus_history() with fake data
+
+        This simulates the behavior of number.py's _async_lerne_aus_history()
+        without requiring HA History DB.
+        """
+        self._enable_history_learning = True
+        return self
+
+    def _maybe_learn_from_history(self):
+        """Optionally learn from stored history states.
+
+        Called internally after expect_vorlauf_soll() if history learning is enabled.
+        Simulates learning from a state that happened ~4h ago.
+        """
+        if not self._enable_history_learning:
+            return
+
+        # Need at least 4 hours of simulated history (240 minutes)
+        if self._current_time < 240:
+            return
+
+        # Find a state from ~4h ago (240 minutes)
+        target_minutes_ago = 240
+
+        # Find the state closest to target_minutes_ago
+        best_state = None
+        best_diff = None
+
+        for state in self._history_states:
+            diff = abs(state['minutes_ago'] - target_minutes_ago)
+            if best_diff is None or diff < best_diff:
+                best_diff = diff
+                best_state = state
+
+        if not best_state:
+            return
+
+        # Check if we already learned from this state
+        if best_state.get('learned'):
+            return
+
+        # Need raum_ist_spaeter (2-6h after decision)
+        # Find current raum_ist as "spaeter"
+        raum_ist_spaeter = self._raum_ist
+
+        # Create fake historical_state dict
+        historical_state = {
+            'timestamp': best_state['timestamp'],
+            'aussen_temp': best_state['aussen_temp'],
+            'raum_ist': best_state['raum_ist'],
+            'raum_soll': best_state['raum_soll'],
+            'vorlauf_ist': best_state['vorlauf_ist'],
+            'vorlauf_soll': best_state['vorlauf_soll'],
+            'raum_ist_spaeter': raum_ist_spaeter,
+        }
+
+        # Call controller's learning method
+        success = self.flow_controller.lerne_aus_history(
+            historical_state,
+            self._simulated_datetime
+        )
+
+        if success:
+            best_state['learned'] = True
 
 
 def controller(flow_controller: FlowController) -> FlowTestHelper:
@@ -614,8 +721,9 @@ class TestFlowCalculation:
 
         # Fluent test: Realistische Simulation mit zeitversetzter Reaktion
         # wait(60) setzt das Interval für alle folgenden expect_vorlauf_soll() Aufrufe
+        # enable_history_learning() simuliert HA History-basiertes Lernen
         (
-            controller(flow_controller).tolerance(0.1).wait(60) # Ab jetzt: 60min zwischen jedem expect_vorlauf_soll()
+            controller(flow_controller).enable_history_learning().tolerance(0.1).wait(60) # Ab jetzt: 60min zwischen jedem expect_vorlauf_soll()
             .t_aussen(10).raum_ist(20).raum_soll(21).vorlauf_ist(30)
             .expect_vorlauf_soll(31.7)
             .vorlauf_ist(30.3).raum_ist(20.3).expect_vorlauf_soll(30.8)
@@ -642,16 +750,18 @@ class TestFlowCalculation:
             .vorlauf_ist(40).raum_ist(21.0).expect_vorlauf_soll(28.7)
 
             # SOLL-Wert wird erhöht auf 22.5°C
-            #.vorlauf_ist(30.5).raum_soll(22.5).expect_vorlauf_soll(33.0)
-            #.vorlauf_ist(33.5).raum_ist(21.1).expect_vorlauf_soll(33.0)
-            #.vorlauf_ist(34.8).raum_ist(21.2).expect_vorlauf_soll(34.0)
-            #.vorlauf_ist(35.3).raum_ist(21.4).expect_vorlauf_soll(35.0)
-            #.vorlauf_ist(35.7).raum_ist(21.6).expect_vorlauf_soll(35.5)
-            #.vorlauf_ist(36.0).raum_ist(22.7).expect_vorlauf_soll(35.0)
-            #.vorlauf_ist(34.5).raum_ist(22.6).expect_vorlauf_soll(34.0)
-            #.vorlauf_ist(33.8).raum_ist(22.5).expect_vorlauf_soll(33.5)
-            #.vorlauf_ist(33.5).raum_ist(22.5).expect_vorlauf_soll(33.5)
-            #.vorlauf_ist(33.5).raum_ist(22.5).expect_vorlauf_soll(33.5)
+            .vorlauf_ist(30.5).raum_soll(22.5).expect_vorlauf_soll(33.2)
+            .vorlauf_ist(33.5).raum_ist(21.1).expect_vorlauf_soll(33.0)
+            .vorlauf_ist(34.8).raum_ist(21.2).expect_vorlauf_soll(32.6)
+            .vorlauf_ist(35.3).raum_ist(21.4).expect_vorlauf_soll(32.0)
+            .vorlauf_ist(35.7).raum_ist(21.6).expect_vorlauf_soll(31.4)
+            .vorlauf_ist(36.0).raum_ist(22.7).expect_vorlauf_soll(28.7)
+            .vorlauf_ist(34.5).raum_ist(22.6).expect_vorlauf_soll(28.7)
+            .vorlauf_ist(33.8).raum_ist(22.5).expect_vorlauf_soll(28.7)
+            .vorlauf_ist(33.5).raum_ist(22.5).expect_vorlauf_soll(28.7)
+            .vorlauf_ist(33.5).raum_ist(22.5).expect_vorlauf_soll(28.7)
+            .vorlauf_ist(33.5).raum_ist(21.5).expect_vorlauf_soll(31.7)
+
             # Außentemperatur sinkt - mehr Vorlauf nötig
             #.vorlauf_ist(33.5).t_aussen(9).expect_vorlauf_soll(33.5)
             #.vorlauf_ist(33.8).t_aussen(8).expect_vorlauf_soll(34.0)
@@ -679,12 +789,12 @@ class TestFlowCalculation:
         #flow_controller.reward_learning_enabled = False  # Klassisches Lernen
 
         (
-            controller(flow_controller).tolerance(0.1).wait(60)
+            controller(flow_controller).enable_history_learning().tolerance(0.1).wait(60)
             .t_aussen(3.4).raum_ist(22.43).raum_soll(22.5).vorlauf_ist(31.7)
-            .expect_vorlauf_soll(40)
-            #.vorlauf_ist(30.3).raum_ist(20.3).expect_vorlauf_soll(30.8)
-            #.vorlauf_ist(30.6).raum_ist(20.5).expect_vorlauf_soll(28.7)
-            #.vorlauf_ist(30.0).raum_ist(20.8).expect_vorlauf_soll(28.7)
-            #.vorlauf_ist(29.0).raum_ist(21.0).expect_vorlauf_soll(28.7)
-            #.vorlauf_ist(28.5).raum_ist(21.0).expect_vorlauf_soll(28.7)
+            .expect_vorlauf_soll(31.8)
+            .vorlauf_ist(30.3).raum_ist(20.3).expect_vorlauf_soll(38.4)
+            .vorlauf_ist(30.6).raum_ist(20.5).expect_vorlauf_soll(37.8)
+            .vorlauf_ist(30.0).raum_ist(20.8).expect_vorlauf_soll(36.9)
+            .vorlauf_ist(29.0).raum_ist(21.0).expect_vorlauf_soll(36.3)
+            .vorlauf_ist(28.5).raum_ist(21.0).expect_vorlauf_soll(36.3)
         )

@@ -14,6 +14,7 @@ from .types import (
     HistoryBuffer,
     ModelStats,
     SensorValues,
+    TempVorlauf,
     VorlaufSollWeight,
 )
 
@@ -40,6 +41,7 @@ class FlowController:
         self.learning_rate = learning_rate
         self.trend_history_size = trend_history_size
 
+        self.use_fallback = True
         self.predictions_count = 0
 
         self._setup()
@@ -55,13 +57,12 @@ class FlowController:
             force_fallback: Wenn True, erzwinge Fallback-Modus (z.B. bei Model-Reset)
         """
 
-        # Speichere alten use_fallback Status (für Restart-Persistenz)
-        old_use_fallback = getattr(self, "use_fallback", None)
-
         # River Online-Learning Model
         self.model = compose.Pipeline(
             preprocessing.StandardScaler(),
-            linear_model.LinearRegression(optimizer=optim.SGD(self.learning_rate)),
+            linear_model.LinearRegression(
+                optimizer=optim.Adam(self.learning_rate)
+            ),
         )
 
         # ZEITBASIERTE Historie für Trend-Berechnung
@@ -76,24 +77,11 @@ class FlowController:
 
         # Metriken
         self.metric = metrics.MAE()
-        self.predictions_count = 0
+        self.min_predictions_for_model = 10
 
-        # Kaltstart-Heizkurve (fallback)
-        # Intelligente Fallback-Steuerung:
-        # 1. force_fallback=True → Erzwinge Fallback (z.B. nach Model-Reset)
-        # 2. Erster Init (old_use_fallback=None) → Starte mit Fallback
-        # 3. Restart (old_use_fallback!=None) → Behalte alten Status
         if force_fallback:
             self.use_fallback = True
             _LOGGER.info("Fallback erzwungen (Model-Reset)")
-        elif old_use_fallback is None:
-            self.use_fallback = True  # Erster Start
-            _LOGGER.info("Fallback aktiviert (Kaltstart)")
-        else:
-            self.use_fallback = old_use_fallback  # Restart: behalte Status
-            _LOGGER.info("Fallback-Status beibehalten: %s", self.use_fallback)
-
-        self.min_predictions_for_model = 10
 
         _LOGGER.info(
             "_setup(): min=%s, max=%s, lr=%s, history=%s",
@@ -111,20 +99,22 @@ class FlowController:
 
         _LOGGER.info("_heizkurve_fallback()")
 
-        # Basis-Heizkurve (anpassbar)
-        if aussen_temp <= -10:
-            vorlauf = 38.0
-        elif aussen_temp >= 15:
-            vorlauf = 28.0
-        else:
-            # Lineare Interpolation
-            vorlauf = 38.0 - (aussen_temp + 10) * (13.0 / 28.0)
+        max_vorlauf = self.min_vorlauf + (self.max_vorlauf - self.min_vorlauf) // 2
+
+        p0 = TempVorlauf(15.0, self.min_vorlauf)
+        p1 = TempVorlauf(-10.0, max_vorlauf)
+
+        # 1. Die mathematische Gerade (funktioniert immer, solange p0.temp != p1.temp)
+        vorlauf = p0.vorlauf + (p1.vorlauf - p0.vorlauf) / (p1.temp - p0.temp) * (aussen_temp - p0.temp)
 
         # Korrektur basierend auf Raum-Abweichung
-        if raum_abweichung > 0.5:  # Raum zu kalt
-            vorlauf += raum_abweichung * 3.0
-        elif raum_abweichung < -0.5:  # Raum zu warm
-            vorlauf += raum_abweichung * 5.0
+        if raum_abweichung > 0.5 or raum_abweichung < -0.5:  # Raum zu kalt
+            vorlauf += raum_abweichung * 2.0
+
+        v_min = min(p0.vorlauf, p1.vorlauf)
+        v_max = max(p0.vorlauf, p1.vorlauf)
+
+        vorlauf = max(v_min, min(vorlauf, v_max))
 
         _LOGGER.info("_heizkurve_fallback() => %.1f", vorlauf)
 
@@ -230,6 +220,8 @@ class FlowController:
             korrigierter_vorlauf = erfahrung.vorlauf_soll - abweichung * 2.0
             weight = 2.0
 
+        _LOGGER.info("_bewerte_erfahrung() korrigierter_vorlauf=%s, weight=%s", korrigierter_vorlauf, weight)
+
         return VorlaufSollWeight(vorlauf_soll=korrigierter_vorlauf, weight=weight)
 
     def lerne_aus_history(
@@ -292,6 +284,8 @@ class FlowController:
                 erfahrung=erfahrung, raum_ist_jetzt=current_raum_ist
             )
 
+            _LOGGER.info("lerne_aus_history() features=%s", features)
+
             self.model.learn_one(
                 features.to_dict(),
                 korrigierter_vorlauf_weight.vorlauf_soll,
@@ -343,6 +337,10 @@ class FlowController:
                 self.min_predictions_for_model,
                 vorlauf_soll,
             )
+
+            if self.predictions_count >= 10:
+                _LOGGER.info("Wechsel von Heizkurve zu Model-Modus")
+                self.use_fallback = False
         else:
             # Model verwenden
             try:
@@ -389,6 +387,10 @@ class FlowController:
         # Nur inkrementieren wenn Model nicht gerade zurückgesetzt wurde
         if not model_was_reset:
             self.predictions_count += 1
+
+
+        if self.predictions_count >= self.min_predictions_for_model:
+            self.use_fallback = False
 
         # History-basiertes Lernen wird von number.py über lerne_aus_history() aufgerufen
         # (Nicht mehr hier, da wir Zugriff auf HA-History brauchen)
