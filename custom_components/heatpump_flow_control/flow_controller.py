@@ -132,12 +132,12 @@ class FlowController:
         _LOGGER.info("Starte synthetisches Training (Temperaturbereich %.1f bis %.1f°C)", temp_min, temp_max)
 
         # Viele Trainingsdurchläufe für präzises Lernen
-        for _ in range(50):
+        for _ in range(20):
             for t_aussen in range(int(temp_min), int(temp_max) + 1):
-                # Schwerpunkt auf 22.5°C legen
-                for raum_soll in [21.0, 21.5, 22.0, 22.5, 22.5, 23.0]:
-                    # Mehrere raum_abweichungen für robustes Training
-                    for raum_abweichung in [-0.5, 0.0, 0.5]:
+                # Breiter Temperaturbereich 16-28°C mit Schwerpunkt auf 22.5°C
+                for raum_soll in [16.0, 17.0, 18.0, 19.0, 20.0, 21.0, 21.5, 22.0, 22.5, 22.5, 23.0, 24.0, 25.0, 26.0, 27.0, 28.0]:
+                    # Breite Abweichungen für robustes Training (auch große Abweichungen wie im echten Betrieb)
+                    for raum_abweichung in [-5.0, -3.0, -1.0, -0.5, 0.0, 0.5, 1.0, 3.0, 5.0]:
                         # Berechne Vorlauf-Soll aus Heizkurve
                         vorlauf_curve = self._heizkurve_fallback(
                             float(t_aussen), raum_abweichung
