@@ -55,10 +55,10 @@ def get_config_schema(defaults=None):
                     domain=["input_number", "number", "climate"]
                 )
             ),
-            vol.Optional(
+            vol.Required(
                 "betriebsart_sensor", default=defaults.get("betriebsart_sensor")
             ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
-            vol.Optional(
+            vol.Required(
                 "betriebsart_heizen_wert",
                 default=defaults.get("betriebsart_heizen_wert", "Heizen"),
             ): selector.TextSelector(
@@ -108,13 +108,6 @@ def get_config_schema(defaults=None):
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(
                     min=0.001, max=0.1, step=0.001, mode=NumberSelectorMode.BOX
-                )
-            ),
-            vol.Optional(
-                "trend_history_size", default=defaults.get("trend_history_size", 12)
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=6, max=48, step=1, mode=NumberSelectorMode.BOX
                 )
             ),
         }

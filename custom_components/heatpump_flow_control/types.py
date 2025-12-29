@@ -92,8 +92,6 @@ class SensorValues:
 class ModelStats:
     """Model statsistics."""
     mae: float
-    predictions_count: int
-    use_fallback: bool
     history_size: int
     erfahrungen_total: int
     erfahrungen_gelernt: int

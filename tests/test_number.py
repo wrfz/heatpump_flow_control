@@ -12,7 +12,6 @@ from custom_components.heatpump_flow_control.const import (
     CONF_MIN_VORLAUF,
     CONF_RAUM_IST_SENSOR,
     CONF_RAUM_SOLL_SENSOR,
-    CONF_TREND_HISTORY_SIZE,
     CONF_UPDATE_INTERVAL,
     CONF_VORLAUF_IST_SENSOR,
     CONF_VORLAUF_SOLL_ENTITY,
@@ -64,7 +63,6 @@ def full_config(minimal_config):
             CONF_MAX_VORLAUF: 50.0,
             CONF_UPDATE_INTERVAL: 60,
             CONF_LEARNING_RATE: 0.01,
-            CONF_TREND_HISTORY_SIZE: 10,
         }
     )
     return config
@@ -98,7 +96,6 @@ class TestFlowControlNumberInit:
         assert number._max_vorlauf == 50.0
         assert number._update_interval_minutes == 60
         assert number._learning_rate == 0.01
-        assert number._trend_history_size == 10
 
     def test_init_default_values(self, mock_hass, minimal_config):
         """Test that default values are applied correctly."""

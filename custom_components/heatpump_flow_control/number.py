@@ -32,7 +32,6 @@ from .const import (
     ATTR_LAST_UPDATE,
     ATTR_MODEL_MAE,
     ATTR_NEXT_UPDATE,
-    ATTR_PREDICTIONS_COUNT,
     ATTR_RAUM_ABWEICHUNG,
     ATTR_RAUM_IST,
     ATTR_RAUM_SOLL,
@@ -45,7 +44,6 @@ from .const import (
     CONF_MIN_VORLAUF,
     CONF_RAUM_IST_SENSOR,
     CONF_RAUM_SOLL_SENSOR,
-    CONF_TREND_HISTORY_SIZE,
     CONF_UPDATE_INTERVAL,
     CONF_VORLAUF_IST_SENSOR,
     CONF_VORLAUF_SOLL_ENTITY,
@@ -53,11 +51,10 @@ from .const import (
     DEFAULT_LEARNING_RATE,
     DEFAULT_MAX_VORLAUF,
     DEFAULT_MIN_VORLAUF,
-    DEFAULT_TREND_HISTORY_SIZE,
     DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
 )
-from .flow_controller import FlowController, PICKLE_VERSION
+from .flow_controller import PICKLE_VERSION, FlowController
 from .types import SensorValues
 
 # pylint: disable=hass-logger-capital, hass-logger-period
@@ -107,8 +104,6 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
         self._raum_soll_sensor = config[CONF_RAUM_SOLL_SENSOR]
         self._vorlauf_ist_sensor = config[CONF_VORLAUF_IST_SENSOR]
         self._vorlauf_soll_entity = config[CONF_VORLAUF_SOLL_ENTITY]
-
-        # Optional: Betriebsart-Sensor
         self._betriebsart_sensor = config.get(CONF_BETRIEBSART_SENSOR)
         self._betriebsart_heizen_wert = config.get(
             CONF_BETRIEBSART_HEIZEN_WERT, DEFAULT_BETRIEBSART_HEIZEN_WERT
@@ -121,9 +116,6 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
             CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL
         )
         self._learning_rate = config.get(CONF_LEARNING_RATE, DEFAULT_LEARNING_RATE)
-        self._trend_history_size = config.get(
-            CONF_TREND_HISTORY_SIZE, DEFAULT_TREND_HISTORY_SIZE
-        )
 
         # Pfad für die Model-Datei
         model_file_name = f"{DOMAIN}_{entry_id}.model.pkl"
@@ -134,12 +126,10 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
             min_vorlauf=self._min_vorlauf,
             max_vorlauf=self._max_vorlauf,
             learning_rate=self._learning_rate,
-            trend_history_size=self._trend_history_size,
         )
 
         # State
         self._attr_native_value = None
-        self._last_vorlauf_soll = None
         self._extra_attributes = {}
         self._last_update = None
         self._next_update = None
@@ -207,7 +197,6 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
         _LOGGER.info("async_set_native_value(%.2f)", value)
 
         self._attr_native_value = value
-        self._last_vorlauf_soll = value
 
         # Bei manueller Änderung auch direkt senden (unabhängig vom Switch)
         await self._async_set_vorlauf_soll(value)
@@ -296,9 +285,6 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
         loaded_controller = await self.hass.async_add_executor_job(_load)
         if loaded_controller:
             self._controller = loaded_controller
-            _LOGGER.info(
-                "Model loaded (Predictions: %d)", loaded_controller.predictions_count
-            )
 
     async def _async_save_model(self) -> None:
         """Speichert das Modell."""
@@ -352,18 +338,18 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
         betriebsart_state = self.hass.states.get(self._betriebsart_sensor)
         if betriebsart_state is None:
             _LOGGER.warning(
-                "Betriebsart sensor %s not found, assuming heating mode",
+                "Betriebsart sensor %s not found, assuming heating disabled",
                 self._betriebsart_sensor,
             )
-            return True
+            return False
 
         if betriebsart_state.state in ("unavailable", "unknown"):
             _LOGGER.debug(
-                "Betriebsart sensor %s is %s, assuming heating mode",
+                "Betriebsart sensor %s is %s, assuming heating disabled",
                 self._betriebsart_sensor,
                 betriebsart_state.state,
             )
-            return True
+            return False
 
         current_mode = betriebsart_state.state.strip()
         is_heating = current_mode == self._betriebsart_heizen_wert
@@ -455,7 +441,6 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
 
             # Update state
             self._attr_native_value = round(vorlauf_soll, 1)
-            self._last_vorlauf_soll = vorlauf_soll
             self._last_update = dt_util.now()
             self._next_update = self._last_update + timedelta(
                 minutes=self._update_interval_minutes
@@ -486,17 +471,11 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
                 ATTR_AUSSEN_TREND_3H: round(features.aussen_trend_3h, 3),
                 ATTR_AUSSEN_TREND_6H: round(features.aussen_trend_6h, 3),
                 ATTR_MODEL_MAE: round(model_statistics.mae, 2),
-                ATTR_PREDICTIONS_COUNT: model_statistics.predictions_count,
                 ATTR_LAST_UPDATE: self._last_update.isoformat(),
                 ATTR_NEXT_UPDATE: self._next_update.isoformat(),
-                "use_fallback": model_statistics.use_fallback,
                 "history_size": model_statistics.history_size,
                 "betriebsart": current_betriebsart,
-                "learning_enabled": current_betriebsart == self._betriebsart_heizen_wert
-                if current_betriebsart
-                else True,
                 # NEU: History-basiertes Lernen (persistiert über Reboots)
-                "history_learning": True,
                 "erfahrungen_gelernt": self._extra_attributes.get("erfahrungen_gelernt", 0)
             }
 

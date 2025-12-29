@@ -45,18 +45,14 @@ class FlowController:
         min_vorlauf: float,
         max_vorlauf: float,
         learning_rate: float,
-        trend_history_size: int,
     ) -> None:
         """Initialize the flow controller."""
 
         self.min_vorlauf = min_vorlauf
         self.max_vorlauf = max_vorlauf
         self.learning_rate = learning_rate
-        self.trend_history_size = trend_history_size
 
         self.pickle_version = PICKLE_VERSION  # Für Migrations-Check
-        self.use_fallback = False  # Kein Fallback - Model wird sofort mit synthetischen Daten trainiert
-        self.predictions_count = 0
 
         # Feature-Liste für zeitversetztes Lernen (statt HA DB)
         self.erfahrungs_liste: list[Erfahrung] = []  # Speichert alle Predictions mit Features
@@ -66,14 +62,8 @@ class FlowController:
 
     def _setup(
         self,
-        *,
-        force_fallback: bool = False,
     ) -> None:
-        """Initialize the flow controller.
-
-        Args:
-            force_fallback: Wenn True, erzwinge Fallback-Modus (z.B. bei Model-Reset)
-        """
+        """Initialize the flow controller."""
 
         # River Online-Learning Model
         self.model = compose.Pipeline(
@@ -97,20 +87,15 @@ class FlowController:
         self.metric = metrics.MAE()
         self.min_predictions_for_model = 10
 
-        if force_fallback:
-            self.use_fallback = True
-            _LOGGER.info("Fallback erzwungen (Model-Reset)")
-        else:
-            # Model sofort mit synthetischen Daten trainieren
-            _LOGGER.info("Trainiere Model mit synthetischen Daten")
-            self._train_synthetic_data()
+        # Model mit synthetischen Daten trainieren
+        _LOGGER.info("Trainiere Model mit synthetischen Daten")
+        self._train_synthetic_data()
 
         _LOGGER.info(
-            "_setup(): min=%s, max=%s, lr=%s, history=%s",
+            "_setup(): min=%s, max=%s, lr=%s",
             self.min_vorlauf,
             self.max_vorlauf,
             self.learning_rate,
-            self.trend_history_size,
         )
 
     def _heizkurve_fallback(self, aussen_temp: float, raum_abweichung: float) -> float:
@@ -330,7 +315,6 @@ class FlowController:
         stats = {"gelernt": 0, "uebersprungen": 0}
 
         now = datetime.now()
-        cutoff_time = now - timedelta(hours=self.min_reward_hours)
 
         # Finde Erfahrungen die alt genug sind (4h) und noch nicht gelernt wurden
         for erfahrung in self.erfahrungs_liste:
@@ -439,8 +423,6 @@ class FlowController:
         # Begrenzung auf konfigurierten Bereich
         vorlauf_soll = max(self.min_vorlauf, min(self.max_vorlauf, vorlauf_soll))
 
-        self.predictions_count += 1
-
         # Speichere Features für zeitversetztes Lernen (in 4h)
         erfahrung = Erfahrung(
             timestamp=datetime.now(),
@@ -479,19 +461,9 @@ class FlowController:
         wartend = sum(1 for e in self.erfahrungs_liste if not e.gelernt)
 
         return ModelStats(
-            mae = self.metric.get() if self.predictions_count > 0 else 0.0,
-            predictions_count = self.predictions_count,
-            use_fallback = self.use_fallback,
+            mae = self.metric.get(),
             history_size = len(self.aussen_temp_history),
             erfahrungen_total = len(self.erfahrungs_liste),
             erfahrungen_gelernt = gelernt,
             erfahrungen_wartend = wartend,
-        )
-
-    def reset_model(self) -> None:
-        """Setzt das Model zurück (für Neustart)."""
-        _LOGGER.info("-> reset_model()")
-
-        self._setup(
-            force_fallback=True,  # Erzwinge Fallback nach manuellem Reset
         )

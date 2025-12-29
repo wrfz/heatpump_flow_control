@@ -16,8 +16,7 @@
           "min_vorlauf": "Minimale Vorlauftemperatur",
           "max_vorlauf": "Maximale Vorlauftemperatur",
           "update_interval": "Update-Intervall (Minuten)",
-          "learning_rate": "Lernrate",
-          "trend_history_size": "Trend-Historie Größe"
+          "learning_rate": "Lernrate"
         }
       }
     },
