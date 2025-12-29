@@ -614,6 +614,134 @@ class TestPersistancey:
 class TestLearning:
     """Test prediction logic."""
 
+    def _assert_temperature_predictions(
+        self,
+        flow_controller: FlowController,
+        temperature_table: str,
+        tolerance: float = 0.1
+    ) -> None:
+        """Helper to test temperature predictions against expected table.
+
+        Args:
+            flow_controller: The controller to test
+            temperature_table: Table with expected values in format:
+                t_aussen | raum-ist | raum-soll | vorlauf_ist | vorlauf_soll
+                -------------------------------------------------------------
+                10.0     | 22,5     | 22,5      | 28,0        | 26,40
+                ...
+            tolerance: Allowed deviation in °C
+        """
+        # Parse temperature table
+        expected_rows = []
+        for line in temperature_table.strip().split('\n'):
+            line = line.strip()
+            if not line or '|' not in line or '---' in line or 't_aussen' in line:
+                continue
+
+            parts = [p.strip().replace(',', '.') for p in line.split('|')]
+            if len(parts) == 5:
+                expected_rows.append({
+                    't_aussen': float(parts[0]),
+                    'raum_ist': float(parts[1]),
+                    'raum_soll': float(parts[2]),
+                    'vorlauf_ist': float(parts[3]),
+                    'vorlauf_soll': float(parts[4])
+                })
+
+        # Execute predictions and collect actual results
+        test_helper = (
+            controller(flow_controller)
+            .enable_history_learning()
+            .wait(60)
+        )
+
+        actual_rows = []
+        errors = []
+
+        for i, expected in enumerate(expected_rows):
+            # Execute prediction
+            test_helper = (
+                test_helper
+                .t_aussen(expected['t_aussen'])
+                .raum_ist(expected['raum_ist'])
+                .raum_soll(expected['raum_soll'])
+                .vorlauf_ist(expected['vorlauf_ist'])
+            )
+
+            # Get actual prediction
+            vorlauf_soll, _ = flow_controller.berechne_vorlauf_soll(
+                SensorValues(
+                    aussen_temp=expected['t_aussen'],
+                    raum_ist=expected['raum_ist'],
+                    raum_soll=expected['raum_soll'],
+                    vorlauf_ist=expected['vorlauf_ist'],
+                )
+            )
+
+            actual_rows.append({
+                't_aussen': expected['t_aussen'],
+                'raum_ist': expected['raum_ist'],
+                'raum_soll': expected['raum_soll'],
+                'vorlauf_ist': expected['vorlauf_ist'],
+                'vorlauf_soll': vorlauf_soll
+            })
+
+            # Check if within tolerance
+            diff = abs(vorlauf_soll - expected['vorlauf_soll'])
+            if diff > tolerance:
+                errors.append({
+                    'row': i + 1,
+                    't_aussen': expected['t_aussen'],
+                    'expected': expected['vorlauf_soll'],
+                    'actual': vorlauf_soll,
+                    'diff': diff
+                })
+
+        # If there are errors, generate helpful output table
+        if errors:
+            # Generate table with actual values (easy to copy-paste)
+            output_lines = [
+                "\n" + "="*80,
+                "TEST FAILED - Vorlauf predictions don't match expected values",
+                "="*80,
+                "\nACTUAL OUTPUT TABLE (copy this to update test):",
+                "-"*80,
+                "        t_aussen | raum-ist | raum-soll | vorlauf_ist | vorlauf_soll",
+                "        -------------------------------------------------------------"
+            ]
+
+            for row in actual_rows:
+                # Add separator lines at original positions
+                if row['t_aussen'] in [-10.0, -14.0]:
+                    output_lines.append("        -------------------------------------------------------------")
+
+                output_lines.append(
+                    f"        {row['t_aussen']:>5.1f}     | "
+                    f"{row['raum_ist']:>4.1f}     | "
+                    f"{row['raum_soll']:>5.1f}     | "
+                    f"{row['vorlauf_ist']:>7.1f}     | "
+                    f"{row['vorlauf_soll']:.2f}"
+                )
+
+            output_lines.extend([
+                "-"*70,
+                "\nERROR DETAILS:",
+                "-"*70,
+            ])
+
+            output_lines.extend(
+                f"Row {err['row']:2d}: t_aussen={err['t_aussen']:>6.1f}°C  "
+                f"Expected: {err['expected']:.2f}°C  "
+                f"Actual: {err['actual']:.2f}°C  "
+                f"Diff: {err['diff']:.2f}°C (tolerance: {tolerance}°C)"
+                for err in errors
+            )
+
+            output_lines.append("="*70 + "\n")
+
+            error_msg = "\n".join(output_lines)
+            pytest.fail(error_msg)
+
     def test_outside_temperature_learning(self):
         """Test that the model learns to adjust flow temperature based on outside temperature changes."""
 
@@ -623,103 +751,86 @@ class TestLearning:
             learning_rate=0.01,
         )
 
-        test_helper = (
-            controller(flow_controller)
-            .enable_history_learning()
-            .wait(60)
-            .raum_ist(22.5)
-            .raum_soll(22.5)
-            .tolerance(0.1)
+        temperatures = """
+        t_aussen | raum-ist | raum-soll | vorlauf_ist | vorlauf_soll
+        -------------------------------------------------------------
+        10.0     | 22,5     | 22,5      | 28,0        | 26,40
+         8.0     | 22,5     | 22,5      | 27,0        | 27,09
+         6.0     | 22,5     | 22,5      | 26,5        | 27,78
+         4.0     | 22,5     | 22,5      | 27,0        | 28,46
+         2.0     | 22,5     | 22,5      | 27,8        | 29,15
+         0.0     | 22,5     | 22,5      | 28,5        | 29,84
+        -2.0     | 22,5     | 22,5      | 29,3        | 30,53
+        -4.0     | 22,5     | 22,5      | 30,0        | 31,22
+        -6.0     | 22,5     | 22,5      | 30,8        | 31,90
+        -8.0     | 22,5     | 22,5      | 31,5        | 32,59
+        -10.0    | 22,5     | 22,5      | 32,3        | 33,28
+        -12.0    | 22,5     | 22,5      | 33,0        | 33,97
+        -14.0    | 22,5     | 22,5      | 33,7        | 34,66
+        -15.0    | 22,5     | 22,5      | 34,5        | 35,00
+        -------------------------------------------------------------
+        -14.0    | 22,5     | 22,5      | 34,8        | 34,66
+        -12.0    | 22,5     | 22,5      | 34,5        | 33,97
+        -10.0    | 22,5     | 22,5      | 34,0        | 33,28
+         -8.0    | 22,5     | 22,5      | 33,5        | 32,59
+         -6.0    | 22,5     | 22,5      | 33,0        | 31,90
+         -4.0    | 22,5     | 22,5      | 32,3        | 31,22
+         -2.0    | 22,5     | 22,5      | 31,5        | 30,53
+          0.0    | 22,5     | 22,5      | 30,7        | 29,84
+          2.0    | 22,5     | 22,5      | 30,0        | 29,15
+          4.0    | 22,5     | 22,5      | 29,3        | 28,46
+          6.0    | 22,5     | 22,5      | 28,5        | 27,78
+          8.0    | 22,5     | 22,5      | 27,7        | 27,09
+         10.0    | 22,5     | 22,5      | 27,0        | 26,40
+        """
 
-            .t_aussen(10.0).vorlauf_ist(28.0)
-            .expect_vorlauf_soll(26.4)
+        self._assert_temperature_predictions(flow_controller, temperatures)
 
-            .t_aussen(8.0).vorlauf_ist(27.0)
-            .expect_vorlauf_soll(27.09)
+    def test_raum_soll_temperature_learning(self):
+        """Test that the model learns to adjust flow temperature based on outside temperature changes."""
 
-            .t_aussen(6.0).vorlauf_ist(26.5)
-            .expect_vorlauf_soll(27.78)
-
-            .t_aussen(4.0).vorlauf_ist(27.0)
-            .expect_vorlauf_soll(28.46)
-
-            .t_aussen(2.0).vorlauf_ist(27.8)
-            .expect_vorlauf_soll(29.15)
-
-            .t_aussen(0.0).vorlauf_ist(28.5)
-            .expect_vorlauf_soll(29.84)
-
-            .t_aussen(-2.0).vorlauf_ist(29.3)
-            .expect_vorlauf_soll(30.53)
-
-            .t_aussen(-4.0).vorlauf_ist(30.0)
-            .expect_vorlauf_soll(31.22)
-
-            .t_aussen(-6.0).vorlauf_ist(30.8)
-            .expect_vorlauf_soll(31.90)
-
-            .t_aussen(-8.0).vorlauf_ist(31.5)
-            .expect_vorlauf_soll(32.59)
+        flow_controller = FlowController(
+            min_vorlauf=25.0,
+            max_vorlauf=40.0,
+            learning_rate=0.01,
         )
 
-        # Continue with more predictions - model continues learning from history
-        # Temperatur sinkt weiter von -10°C bis -15°C → Vorlauf muss steigen!
-        test_helper = (
-            test_helper
-            # Continue predictions: Temperatur sinkt weiter, vorlauf_ist folgt verzögert
-            .t_aussen(-10.0).vorlauf_ist(32.3)
-            .expect_vorlauf_soll(33.28)
+        temperatures = """
+        t_aussen | raum-ist | raum-soll | vorlauf_ist | vorlauf_soll
+        -------------------------------------------------------------
+         0.0     | 20.0     |  22.5     |    32.0     | 29.49
+         0.0     | 20.1     |  22.5     |    30.0     | 29.50
+         0.0     | 20.2     |  22.5     |    28.0     | 29.52
+         0.0     | 20.3     |  22.5     |    28.5     | 29.53
+         0.0     | 20.4     |  22.5     |    29.0     | 29.55
+         0.0     | 20.6     |  22.5     |    28.5     | 29.58
+         0.0     | 20.8     |  22.5     |    29.3     | 29.61
+         0.0     | 21.1     |  22.5     |    30.0     | 29.65
+         0.0     | 21.4     |  22.5     |    30.8     | 29.69
+         0.0     | 21.7     |  22.5     |    31.5     | 29.74
+         0.0     | 22.0     |  22.5     |    32.3     | 29.78
+         0.0     | 22.2     |  22.5     |    33.0     | 29.81
+         0.0     | 22.4     |  22.5     |    33.7     | 29.84
+         0.0     | 22.5     |  22.5     |    34.5     | 29.86
+        -------------------------------------------------------------
+         0.0     | 22.5     |  20.0     |    34.8     | 30.23
+         0.0     | 22.4     |  20.0     |    34.5     | 30.21
+         0.0     | 22.2     |  20.0     |    34.0     | 30.18
+         0.0     | 22.0     |  20.0     |    34.0     | 30.15
+         0.0     | 22.7     |  20.0     |    33.5     | 30.26
+         0.0     | 21.4     |  20.0     |    33.0     | 30.06
+         0.0     | 21.1     |  20.0     |    32.3     | 30.02
+         0.0     | 20.8     |  20.0     |    31.5     | 29.97
+         0.0     | 20.6     |  20.0     |    30.7     | 29.94
+         0.0     | 20.4     |  20.0     |    30.0     | 29.91
+         0.0     | 20.3     |  20.0     |    29.3     | 29.90
+         0.0     | 20.2     |  20.0     |    28.5     | 29.88
+         0.0     | 20.1     |  20.0     |    27.7     | 29.87
+         0.0     | 20.0     |  20.0     |    27.0     | 29.85
+        -------------------------------------------------------------
+         0.0     | 20.0     |  25.0     |    27.0     | 29.12
+         0.0     | 20.0     |  25.0     |    27.0     | 29.12
+         0.0     | 20.0     |  25.0     |    27.0     | 29.12
+        """
 
-            .t_aussen(-12.0).vorlauf_ist(33.0)
-            .expect_vorlauf_soll(33.97)
-
-            .t_aussen(-14.0).vorlauf_ist(33.7)
-            .expect_vorlauf_soll(34.66)
-
-            .t_aussen(-15.0).vorlauf_ist(34.5)
-            .expect_vorlauf_soll(35.0)  # Maximum erreicht
-        )
-
-        # Jetzt Temperatur steigt wieder von -15°C zurück auf 10°C → Vorlauf MUSS FALLEN!
-        test_helper = (
-            test_helper
-            # Temperatur steigt, vorlauf_ist sinkt verzögert
-            .t_aussen(-14.0).vorlauf_ist(34.8)
-            .expect_vorlauf_soll(34.66)
-
-            .t_aussen(-12.0).vorlauf_ist(34.5)
-            .expect_vorlauf_soll(33.97)
-
-            .t_aussen(-10.0).vorlauf_ist(34.0)
-            .expect_vorlauf_soll(33.28)
-
-            .t_aussen(-8.0).vorlauf_ist(33.5)
-            .expect_vorlauf_soll(32.59)
-
-            .t_aussen(-6.0).vorlauf_ist(33.0)
-            .expect_vorlauf_soll(31.90)
-
-            .t_aussen(-4.0).vorlauf_ist(32.3)
-            .expect_vorlauf_soll(31.22)
-
-            .t_aussen(-2.0).vorlauf_ist(31.5)
-            .expect_vorlauf_soll(30.53)
-
-            .t_aussen(0.0).vorlauf_ist(30.7)
-            .expect_vorlauf_soll(29.84)
-
-            .t_aussen(2.0).vorlauf_ist(30.0)
-            .expect_vorlauf_soll(29.15)
-
-            .t_aussen(4.0).vorlauf_ist(29.3)
-            .expect_vorlauf_soll(28.46)
-
-            .t_aussen(6.0).vorlauf_ist(28.5)
-            .expect_vorlauf_soll(27.78)
-
-            .t_aussen(8.0).vorlauf_ist(27.7)
-            .expect_vorlauf_soll(27.09)
-
-            .t_aussen(10.0).vorlauf_ist(27.0)
-            .expect_vorlauf_soll(26.4)
-        )
+        self._assert_temperature_predictions(flow_controller, temperatures)
