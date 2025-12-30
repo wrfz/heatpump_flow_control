@@ -40,6 +40,10 @@ class FlowController:
     # Pickle-Version für Migrations-Check
     pickle_version: int = PICKLE_VERSION
 
+    # Model attributes (initialized in _setup())
+    model: compose.Pipeline
+    metric: metrics.MAE
+
     def __init__(
         self,
         min_vorlauf: float,
@@ -48,15 +52,22 @@ class FlowController:
     ) -> None:
         """Initialize the flow controller."""
 
+        # Configuration parameters
         self.min_vorlauf = min_vorlauf
         self.max_vorlauf = max_vorlauf
         self.learning_rate = learning_rate
-
         self.pickle_version = PICKLE_VERSION  # Für Migrations-Check
-
-        # Feature-Liste für zeitversetztes Lernen (statt HA DB)
-        self.erfahrungs_liste: list[Erfahrung] = []  # Speichert alle Predictions mit Features
         self.min_reward_hours = 4.0  # Lernen aus Features die 4h alt sind
+        self.short_history_hours = 3.0
+        self.longterm_history_days = 7
+        self.min_predictions_for_model = 10
+
+        # Initialize all attributes (will be set in _setup())
+        self.erfahrungs_liste: list[Erfahrung] = []  # Speichert alle Predictions mit Features
+        self.aussen_temp_history: HistoryBuffer = HistoryBuffer()
+        self.aussen_temp_longterm: HistoryBuffer = HistoryBuffer()
+        self.vorlauf_longterm: HistoryBuffer = HistoryBuffer()
+        self.raum_temp_longterm: HistoryBuffer = HistoryBuffer()
 
         self._setup()
 
@@ -93,6 +104,88 @@ class FlowController:
 
         _LOGGER.info(
             "_setup(): min=%s, max=%s, lr=%s",
+            self.min_vorlauf,
+            self.max_vorlauf,
+            self.learning_rate,
+        )
+
+    def __getstate__(self) -> dict[str, Any]:
+        """Return state for pickling - only save learned state, not configuration.
+
+        This ensures that configuration changes don't cause pickle incompatibility.
+        Configuration parameters (min_vorlauf, max_vorlauf, etc.) will be set
+        from current config when unpickling.
+        """
+
+        _LOGGER.info("__getstate__()")
+
+        return {
+            # Pickle version for migration
+            "pickle_version": self.pickle_version,
+
+            # Learned model state
+            "model": self.model,
+            "metric": self.metric,
+
+            # Experience list for delayed learning
+            "erfahrungs_liste": self.erfahrungs_liste,
+
+            # Temperature histories for trend calculation
+            "aussen_temp_history": self.aussen_temp_history,
+            "aussen_temp_longterm": self.aussen_temp_longterm,
+            "vorlauf_longterm": self.vorlauf_longterm,
+            "raum_temp_longterm": self.raum_temp_longterm,
+        }
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        """Restore state from pickle.
+
+        Configuration parameters (min_vorlauf, max_vorlauf, learning_rate, etc.)
+        are NOT restored from pickle - they will be set by __init__ with current config.
+        """
+
+        _LOGGER.info("__setstate__()")
+
+        # Restore learned state
+        self.pickle_version = state["pickle_version"]
+        self.model = state["model"]
+        self.metric = state["metric"]
+        self.erfahrungs_liste = state["erfahrungs_liste"]
+        self.aussen_temp_history = state["aussen_temp_history"]
+        self.aussen_temp_longterm = state["aussen_temp_longterm"]
+        self.vorlauf_longterm = state["vorlauf_longterm"]
+        self.raum_temp_longterm = state["raum_temp_longterm"]
+
+        # Note: Configuration parameters must be set via update_config() after unpickling
+
+    def update_config(
+        self,
+        min_vorlauf: float,
+        max_vorlauf: float,
+        learning_rate: float,
+    ) -> None:
+        """Update configuration parameters after unpickling.
+
+        This is called after unpickling to set configuration parameters
+        from the current Home Assistant configuration.
+
+        Args:
+            min_vorlauf: Minimum Vorlauf temperature
+            max_vorlauf: Maximum Vorlauf temperature
+            learning_rate: Learning rate for the model
+        """
+        self.min_vorlauf = min_vorlauf
+        self.max_vorlauf = max_vorlauf
+        self.learning_rate = learning_rate
+
+        # Set other configuration defaults
+        self.min_reward_hours = 4.0
+        self.short_history_hours = 3.0
+        self.longterm_history_days = 7
+        self.min_predictions_for_model = 10
+
+        _LOGGER.info(
+            "Config updated after unpickling: min=%s, max=%s, lr=%s",
             self.min_vorlauf,
             self.max_vorlauf,
             self.learning_rate,

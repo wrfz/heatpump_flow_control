@@ -284,6 +284,13 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
 
         loaded_controller = await self.hass.async_add_executor_job(_load)
         if loaded_controller:
+            # Update configuration parameters from current config
+            # This allows config changes without breaking pickle compatibility
+            loaded_controller.update_config(
+                min_vorlauf=self._min_vorlauf,
+                max_vorlauf=self._max_vorlauf,
+                learning_rate=self._learning_rate,
+            )
             self._controller = loaded_controller
 
     async def _async_save_model(self) -> None:

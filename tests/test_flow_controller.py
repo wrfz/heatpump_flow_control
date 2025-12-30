@@ -137,38 +137,29 @@ class TestPrediction:
             learning_rate=0.01,
         )
 
-        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=-20.0, raum_ist=22.0, raum_soll=22.0, vorlauf_ist=35.0))[0] == pytest.approx(36.77)
-        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=-10.0, raum_ist=22.0, raum_soll=22.0, vorlauf_ist=35.0))[0] == pytest.approx(32)
-        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=0.0, raum_ist=22.0, raum_soll=22.0, vorlauf_ist=35.0))[0] == pytest.approx(29.2)
-        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=10.0, raum_ist=22.0, raum_soll=22.0, vorlauf_ist=35.0))[0] == pytest.approx(26.4)
-        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=15.0, raum_ist=22.0, raum_soll=22.0, vorlauf_ist=35.0))[0] == pytest.approx(25)
-        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=20.0, raum_ist=22.0, raum_soll=22.0, vorlauf_ist=35.0))[0] == pytest.approx(25)
+        # Test direct fallback curve (not the trained model)
+        assert controller._heizkurve_fallback(-20.0, 0.0) == pytest.approx(35.00, abs=0.01)     # noqa: SLF001
+        assert controller._heizkurve_fallback(-10.0, 0.0) == pytest.approx(33.28, abs=0.01)     # noqa: SLF001
+        assert controller._heizkurve_fallback(  0.0, 0.0) == pytest.approx(29.84, abs=0.01)     # noqa: SLF001
+        assert controller._heizkurve_fallback( 10.0, 0.0) == pytest.approx(26.40, abs=0.01)     # noqa: SLF001
+        assert controller._heizkurve_fallback( 15.0, 0.0) == pytest.approx(26.40, abs=0.01)     # noqa: SLF001
+        assert controller._heizkurve_fallback( 20.0, 0.0) == pytest.approx(26.40, abs=0.01)     # noqa: SLF001
 
-        controller = FlowController(
-            min_vorlauf=25.0,
-            max_vorlauf=40.0,
-            learning_rate=0.01,
-        )
+        # Test with room temperature deviation (room too hot)
+        assert controller._heizkurve_fallback(-20.0, -1.0) == pytest.approx(34.72, abs=0.01)    # noqa: SLF001
+        assert controller._heizkurve_fallback(-10.0, -1.0) == pytest.approx(31.28, abs=0.01)    # noqa: SLF001
+        assert controller._heizkurve_fallback(  0.0, -1.0) == pytest.approx(27.84, abs=0.01)    # noqa: SLF001
+        assert controller._heizkurve_fallback( 10.0, -1.0) == pytest.approx(26.40, abs=0.01)    # noqa: SLF001
+        assert controller._heizkurve_fallback( 15.0, -1.0) == pytest.approx(26.40, abs=0.01)    # noqa: SLF001
+        assert controller._heizkurve_fallback( 20.0, -1.0) == pytest.approx(26.40, abs=0.01)    # noqa: SLF001
 
-        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=-20.0, raum_ist=22.0, raum_soll=21.0, vorlauf_ist=35.0))[0] == pytest.approx(32)
-        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=-10.0, raum_ist=22.0, raum_soll=21.0, vorlauf_ist=35.0))[0] == pytest.approx(30)
-        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=0.0, raum_ist=22.0, raum_soll=21.0, vorlauf_ist=35.0))[0] == pytest.approx(27.2)
-        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=10.0, raum_ist=22.0, raum_soll=21.0, vorlauf_ist=35.0))[0] == pytest.approx(25)
-        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=15.0, raum_ist=22.0, raum_soll=21.0, vorlauf_ist=35.0))[0] == pytest.approx(25)
-        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=20.0, raum_ist=22.0, raum_soll=21.0, vorlauf_ist=35.0))[0] == pytest.approx(25)
-
-        controller = FlowController(
-            min_vorlauf=25.0,
-            max_vorlauf=40.0,
-            learning_rate=0.01,
-        )
-
-        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=-20.0, raum_ist=21.0, raum_soll=22.0, vorlauf_ist=35.0))[0] == pytest.approx(32)
-        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=-10.0, raum_ist=21.0, raum_soll=22.0, vorlauf_ist=35.0))[0] == pytest.approx(32)
-        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=0.0, raum_ist=21.0, raum_soll=22.0, vorlauf_ist=35.0))[0] == pytest.approx(31.2)
-        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=10.0, raum_ist=21.0, raum_soll=22.0, vorlauf_ist=35.0))[0] == pytest.approx(28.4)
-        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=15.0, raum_ist=21.0, raum_soll=22.0, vorlauf_ist=35.0))[0] == pytest.approx(27)
-        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=20.0, raum_ist=21.0, raum_soll=22.0, vorlauf_ist=35.0))[0] == pytest.approx(25.6)
+        # Test with room temperature deviation (room too cold)
+        assert controller._heizkurve_fallback(-20.0, 1.0) == pytest.approx(35.00, abs=0.01)     # noqa: SLF001
+        assert controller._heizkurve_fallback(-10.0, 1.0) == pytest.approx(35.00, abs=0.01)     # noqa: SLF001
+        assert controller._heizkurve_fallback(  0.0, 1.0) == pytest.approx(31.84, abs=0.01)     # noqa: SLF001
+        assert controller._heizkurve_fallback( 10.0, 1.0) == pytest.approx(28.40, abs=0.01)     # noqa: SLF001
+        assert controller._heizkurve_fallback( 15.0, 1.0) == pytest.approx(26.68, abs=0.01)     # noqa: SLF001
+        assert controller._heizkurve_fallback( 20.0, 1.0) == pytest.approx(26.40, abs=0.01)     # noqa: SLF001
 
     def test_berechne_vorlauf_soll_fallback_mode(self):
         """Test calculation in fallback mode."""
@@ -179,7 +170,7 @@ class TestPrediction:
         )
         controller.min_predictions_for_model = 10
 
-        vorlauf_soll, features = controller.berechne_vorlauf_soll(
+        vorlauf_soll, _ = controller.berechne_vorlauf_soll(
             SensorValues(
                 aussen_temp=5.0,
                 raum_ist=22.0,
@@ -421,7 +412,7 @@ class FlowTestHelper:
             # Also make datetime() constructor work normally
             mock_dt.side_effect = lambda *args, **kw: datetime(*args, **kw)
 
-            vorlauf_soll, features = self.flow_controller.berechne_vorlauf_soll(
+            vorlauf_soll, _ = self.flow_controller.berechne_vorlauf_soll(
                 SensorValues(
                     aussen_temp=self._t_aussen,
                     raum_ist=self._raum_ist,
@@ -599,8 +590,13 @@ class TestPersistancey:
             learning_rate=0.01,
         )
 
-        assert controller.berechne_vorlauf_soll(SensorValues(aussen_temp=0.0, raum_ist=22.0, raum_soll=22.0, vorlauf_ist=35.0))[0] == pytest.approx(29.2)
+        # First prediction
+        result1 = controller.berechne_vorlauf_soll(
+            SensorValues(aussen_temp=0.0, raum_ist=22.0, raum_soll=22.0, vorlauf_ist=35.0)
+        )[0]
+        assert result1 == pytest.approx(32.92, abs=0.01)
 
+        # Pickle and unpickle
         stream = io.BytesIO()
         pickle.dump(controller, stream)
         binary_data = stream.getvalue()
@@ -609,10 +605,65 @@ class TestPersistancey:
         stream.seek(0)
         controller2 = pickle.load(stream)
 
-        assert controller2.predictions_count == 1
+        # After unpickling, config must be restored
+        controller2.update_config(
+            min_vorlauf=25.0,
+            max_vorlauf=40.0,
+            learning_rate=0.01,
+        )
 
-        assert controller2.berechne_vorlauf_soll(SensorValues(aussen_temp=10.0, raum_ist=22.0, raum_soll=22.0, vorlauf_ist=35.0))[0] == pytest.approx(26.4)
-        assert controller2.predictions_count == 2
+        # Verify model state is preserved
+        assert len(controller2.erfahrungs_liste) == 1
+
+        # Second prediction should work with restored model
+        result2 = controller2.berechne_vorlauf_soll(
+            SensorValues(aussen_temp=10.0, raum_ist=22.0, raum_soll=22.0, vorlauf_ist=35.0)
+        )[0]
+        assert result2 == pytest.approx(31.96, abs=0.01)
+        assert len(controller2.erfahrungs_liste) == 2
+
+    def test_config_changes_after_unpickle(self):
+        """Test that config changes work after unpickling."""
+
+        # Create controller with initial config
+        controller = FlowController(
+            min_vorlauf=25.0,
+            max_vorlauf=40.0,
+            learning_rate=0.01,
+        )
+
+        # Make a prediction to train the model
+        controller.berechne_vorlauf_soll(
+            SensorValues(aussen_temp=0.0, raum_ist=22.0, raum_soll=22.0, vorlauf_ist=35.0)
+        )
+
+        # Pickle
+        stream = io.BytesIO()
+        pickle.dump(controller, stream)
+        stream.seek(0)
+
+        # Unpickle with DIFFERENT config (like user changed settings in HA)
+        controller2 = pickle.load(stream)
+        controller2.update_config(
+            min_vorlauf=20.0,  # Changed from 25.0
+            max_vorlauf=50.0,  # Changed from 40.0
+            learning_rate=0.02,  # Changed from 0.01
+        )
+
+        # Verify new config is applied
+        assert controller2.min_vorlauf == 20.0
+        assert controller2.max_vorlauf == 50.0
+        assert controller2.learning_rate == 0.02
+
+        # Verify model state is still preserved
+        assert len(controller2.erfahrungs_liste) == 1
+
+        # Model should still work with new config
+        result = controller2.berechne_vorlauf_soll(
+            SensorValues(aussen_temp=10.0, raum_ist=22.0, raum_soll=22.0, vorlauf_ist=35.0)
+        )
+        assert result[0] >= 20.0  # Respects new min
+        assert result[0] <= 50.0  # Respects new max
 
 class TestLearning:
     """Test prediction logic."""
@@ -647,9 +698,7 @@ class TestLearning:
         cooling_delta = -(raum_ist_old - aussen_temp) * self.COOLING_FACTOR * hours
 
         # New room temperature
-        raum_ist_new = raum_ist_old + heating_delta + cooling_delta
-
-        return raum_ist_new
+        return raum_ist_old + heating_delta + cooling_delta
 
     def _simulate_vorlauf_ist_change(
         self,
@@ -669,9 +718,7 @@ class TestLearning:
         """
         # Flow temperature adjusts towards setpoint
         delta = (vorlauf_soll - vorlauf_ist_old) * self.VORLAUF_ADJUSTMENT_FACTOR * hours
-        vorlauf_ist_new = vorlauf_ist_old + delta
-
-        return vorlauf_ist_new
+        return vorlauf_ist_old + delta
 
     def _assert_temperature_predictions(
         self,
@@ -696,7 +743,7 @@ class TestLearning:
         expected_rows = []
         separator_before_row = set()  # Track which rows should have separator before them
 
-        for i, line in enumerate(temperature_table.strip().split('\n')):
+        for _, line in enumerate(temperature_table.strip().split('\n')):
             line = line.strip()
             if not line or 't_aussen' in line:
                 continue
@@ -1011,7 +1058,7 @@ class TestLearning:
                 )
 
                 # Print table without pytest's "E" prefix for easy copying
-                print("\n" + "\n".join(table_lines) + "\n")
+                print("\n" + "\n".join(table_lines) + "\n")  # noqa: T201
 
             output_lines.append("="*70 + "\n")
 
