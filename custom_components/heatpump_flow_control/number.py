@@ -419,7 +419,7 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
             # Prüfe ob Switch aktiv ist, dann sende an Wärmepumpe
             # Der Switch hat unique_id = {DOMAIN}_{entry_id}_aktiv
             switch_state = None
-            switch_unique_id = f"{DOMAIN}_{self._entry_id}_aktiv"
+            switch_unique_id = f"{DOMAIN}_{self._config_entry.entry_id}_aktiv"
 
             # Suche Switch über unique_id in der Entity Registry
             entity_registry = er.async_get(self.hass)

@@ -69,9 +69,9 @@ def full_config(minimal_config):
 class TestFlowControlNumberInit:
     """Test initialization of FlowControlNumber."""
 
-    def test_init_minimal_config(self, mock_hass, minimal_config):
+    def test_init_minimal_config(self, mock_hass, minimal_config, mock_config_entry):
         """Test initialization with minimal config."""
-        number = FlowControlNumber(mock_hass, minimal_config, "test_entry")
+        number = FlowControlNumber(mock_hass, minimal_config, mock_config_entry)
 
         assert number.hass == mock_hass
         assert number._aussen_temp_sensor == "sensor.aussen_temp"
@@ -84,65 +84,62 @@ class TestFlowControlNumberInit:
         assert number._attr_native_value is None
         assert number._available is False
 
-    def test_init_full_config(self, mock_hass, full_config):
+    def test_init_full_config(self, mock_hass, full_config, mock_config_entry):
         """Test initialization with full config."""
-        number = FlowControlNumber(mock_hass, full_config, "test_entry")
+        number = FlowControlNumber(mock_hass, full_config, mock_config_entry)
 
         assert number._is_heating_entity == "sensor.betriebsart"
-        assert number._min_vorlauf == 25.0
-        assert number._max_vorlauf == 50.0
         assert number._update_interval_minutes == 60
-        assert number._learning_rate == 0.01
 
-    def test_init_default_values(self, mock_hass, minimal_config):
+    def test_init_default_values(self, mock_hass, minimal_config, mock_config_entry):
         """Test that default values are applied correctly."""
-        number = FlowControlNumber(mock_hass, minimal_config, "test_entry")
+        number = FlowControlNumber(mock_hass, minimal_config, mock_config_entry)
 
-        assert number._attr_native_min_value == number._min_vorlauf
-        assert number._attr_native_max_value == number._max_vorlauf
+        assert number._attr_native_min_value == number._controller.min_vorlauf
+        assert number._attr_native_max_value == number._controller.max_vorlauf
         assert number._attr_native_step == 0.5
 
 
 class TestFormatSensorAsFloat:
     """Test _format_sensor_as_float method."""
 
-    def test_format_valid_state(self, mock_hass, minimal_config):
+    def test_format_valid_state(self, mock_hass, minimal_config, mock_config_entry):
         """Test formatting valid sensor state."""
-        number = FlowControlNumber(mock_hass, minimal_config, "test_entry")
+        number = FlowControlNumber(mock_hass, minimal_config, mock_config_entry)
         state = MagicMock()
         state.state = "23.456"
 
         result = number._format_sensor_as_float(state)
         assert result == "23.46"
 
-    def test_format_none_state(self, mock_hass, minimal_config):
+    def test_format_none_state(self, mock_hass, minimal_config, mock_config_entry):
         """Test formatting None state."""
-        number = FlowControlNumber(mock_hass, minimal_config, "test_entry")
+        number = FlowControlNumber(mock_hass, minimal_config, mock_config_entry)
 
         result = number._format_sensor_as_float(None)
         assert result == "None"
 
-    def test_format_unknown_state(self, mock_hass, minimal_config):
+    def test_format_unknown_state(self, mock_hass, minimal_config, mock_config_entry):
         """Test formatting unknown state."""
-        number = FlowControlNumber(mock_hass, minimal_config, "test_entry")
+        number = FlowControlNumber(mock_hass, minimal_config, mock_config_entry)
         state = MagicMock()
         state.state = "unknown"
 
         result = number._format_sensor_as_float(state)
         assert result == "None"
 
-    def test_format_unavailable_state(self, mock_hass, minimal_config):
+    def test_format_unavailable_state(self, mock_hass, minimal_config, mock_config_entry):
         """Test formatting unavailable state."""
-        number = FlowControlNumber(mock_hass, minimal_config, "test_entry")
+        number = FlowControlNumber(mock_hass, minimal_config, mock_config_entry)
         state = MagicMock()
         state.state = "unavailable"
 
         result = number._format_sensor_as_float(state)
         assert result == "None"
 
-    def test_format_invalid_state(self, mock_hass, minimal_config):
+    def test_format_invalid_state(self, mock_hass, minimal_config, mock_config_entry):
         """Test formatting invalid state."""
-        number = FlowControlNumber(mock_hass, minimal_config, "test_entry")
+        number = FlowControlNumber(mock_hass, minimal_config, mock_config_entry)
         state = MagicMock()
         state.state = "not_a_number"
 
@@ -154,9 +151,9 @@ class TestAsyncGetSensorValues:
     """Test _async_get_sensor_values method."""
 
     @pytest.mark.asyncio
-    async def test_get_sensor_values_success(self, mock_hass, minimal_config):
+    async def test_get_sensor_values_success(self, mock_hass, minimal_config, mock_config_entry):
         """Test successful sensor value retrieval."""
-        number = FlowControlNumber(mock_hass, minimal_config, "test_entry")
+        number = FlowControlNumber(mock_hass, minimal_config, mock_config_entry)
 
         # Mock sensor states
         aussen_state = MagicMock()
@@ -185,9 +182,9 @@ class TestAsyncGetSensorValues:
         assert result.vorlauf_ist == 35.0
 
     @pytest.mark.asyncio
-    async def test_get_sensor_values_climate_entity(self, mock_hass, minimal_config):
+    async def test_get_sensor_values_climate_entity(self, mock_hass, minimal_config, mock_config_entry):
         """Test sensor value retrieval with climate entity."""
-        number = FlowControlNumber(mock_hass, minimal_config, "test_entry")
+        number = FlowControlNumber(mock_hass, minimal_config, mock_config_entry)
 
         # Mock sensor states
         aussen_state = MagicMock()
@@ -214,9 +211,9 @@ class TestAsyncGetSensorValues:
         assert result.raum_soll == 21.5
 
     @pytest.mark.asyncio
-    async def test_get_sensor_values_unavailable(self, mock_hass, minimal_config):
+    async def test_get_sensor_values_unavailable(self, mock_hass, minimal_config, mock_config_entry):
         """Test sensor value retrieval with unavailable sensor."""
-        number = FlowControlNumber(mock_hass, minimal_config, "test_entry")
+        number = FlowControlNumber(mock_hass, minimal_config, mock_config_entry)
 
         # Mock sensor states
         aussen_state = MagicMock()
@@ -234,9 +231,9 @@ class TestAsyncGetSensorValues:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_get_sensor_values_missing_sensor(self, mock_hass, minimal_config):
+    async def test_get_sensor_values_missing_sensor(self, mock_hass, minimal_config, mock_config_entry):
         """Test sensor value retrieval with missing sensor."""
-        number = FlowControlNumber(mock_hass, minimal_config, "test_entry")
+        number = FlowControlNumber(mock_hass, minimal_config, mock_config_entry)
 
         mock_hass.states.get.side_effect = [None, MagicMock(), MagicMock(), MagicMock()]
 
@@ -245,9 +242,9 @@ class TestAsyncGetSensorValues:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_get_sensor_values_invalid_value(self, mock_hass, minimal_config):
+    async def test_get_sensor_values_invalid_value(self, mock_hass, minimal_config, mock_config_entry):
         """Test sensor value retrieval with invalid value."""
-        number = FlowControlNumber(mock_hass, minimal_config, "test_entry")
+        number = FlowControlNumber(mock_hass, minimal_config, mock_config_entry)
 
         # Mock sensor states
         aussen_state = MagicMock()
@@ -269,18 +266,18 @@ class TestIsHeatingMode:
     """Test _is_heating_mode method."""
 
     @pytest.mark.asyncio
-    async def test_no_sensor_configured(self, mock_hass, minimal_config):
+    async def test_no_sensor_configured(self, mock_hass, minimal_config, mock_config_entry):
         """Test when no betriebsart sensor is configured."""
-        number = FlowControlNumber(mock_hass, minimal_config, "test_entry")
+        number = FlowControlNumber(mock_hass, minimal_config, mock_config_entry)
 
         result = await number._is_heating_mode()
 
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_sensor_in_heating_mode(self, mock_hass, full_config):
+    async def test_sensor_in_heating_mode(self, mock_hass, full_config, mock_config_entry):
         """Test when sensor shows heating mode."""
-        number = FlowControlNumber(mock_hass, full_config, "test_entry")
+        number = FlowControlNumber(mock_hass, full_config, mock_config_entry)
 
         betriebsart_state = MagicMock()
         betriebsart_state.state = "Heizen"
@@ -291,9 +288,9 @@ class TestIsHeatingMode:
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_sensor_not_in_heating_mode(self, mock_hass, full_config):
+    async def test_sensor_not_in_heating_mode(self, mock_hass, full_config, mock_config_entry):
         """Test when sensor shows different mode."""
-        number = FlowControlNumber(mock_hass, full_config, "test_entry")
+        number = FlowControlNumber(mock_hass, full_config, mock_config_entry)
 
         betriebsart_state = MagicMock()
         betriebsart_state.state = "Kühlen"
@@ -304,9 +301,9 @@ class TestIsHeatingMode:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_sensor_with_whitespace(self, mock_hass, full_config):
+    async def test_sensor_with_whitespace(self, mock_hass, full_config, mock_config_entry):
         """Test when sensor value has whitespace."""
-        number = FlowControlNumber(mock_hass, full_config, "test_entry")
+        number = FlowControlNumber(mock_hass, full_config, mock_config_entry)
 
         betriebsart_state = MagicMock()
         betriebsart_state.state = "  Heizen  "
@@ -321,9 +318,9 @@ class TestAsyncSetVorlaufSoll:
     """Test _async_set_vorlauf_soll method."""
 
     @pytest.mark.asyncio
-    async def test_set_input_number(self, mock_hass, minimal_config):
+    async def test_set_input_number(self, mock_hass, minimal_config, mock_config_entry):
         """Test setting value on input_number entity."""
-        number = FlowControlNumber(mock_hass, minimal_config, "test_entry")
+        number = FlowControlNumber(mock_hass, minimal_config, mock_config_entry)
 
         target_state = MagicMock()
         target_state.domain = "input_number"
@@ -338,9 +335,9 @@ class TestAsyncSetVorlaufSoll:
         )
 
     @pytest.mark.asyncio
-    async def test_set_number_entity(self, mock_hass, minimal_config):
+    async def test_set_number_entity(self, mock_hass, minimal_config, mock_config_entry):
         """Test setting value on number entity."""
-        number = FlowControlNumber(mock_hass, minimal_config, "test_entry")
+        number = FlowControlNumber(mock_hass, minimal_config, mock_config_entry)
 
         target_state = MagicMock()
         target_state.domain = "number"
@@ -355,9 +352,9 @@ class TestAsyncSetVorlaufSoll:
         )
 
     @pytest.mark.asyncio
-    async def test_set_climate_entity(self, mock_hass, minimal_config):
+    async def test_set_climate_entity(self, mock_hass, minimal_config, mock_config_entry):
         """Test setting value on climate entity."""
-        number = FlowControlNumber(mock_hass, minimal_config, "test_entry")
+        number = FlowControlNumber(mock_hass, minimal_config, mock_config_entry)
 
         target_state = MagicMock()
         target_state.domain = "climate"
@@ -372,9 +369,9 @@ class TestAsyncSetVorlaufSoll:
         )
 
     @pytest.mark.asyncio
-    async def test_set_target_not_found(self, mock_hass, minimal_config):
+    async def test_set_target_not_found(self, mock_hass, minimal_config, mock_config_entry):
         """Test setting value when target entity not found."""
-        number = FlowControlNumber(mock_hass, minimal_config, "test_entry")
+        number = FlowControlNumber(mock_hass, minimal_config, mock_config_entry)
 
         mock_hass.states.get.return_value = None
 
@@ -384,9 +381,9 @@ class TestAsyncSetVorlaufSoll:
         mock_hass.services.async_call.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_set_unsupported_domain(self, mock_hass, minimal_config):
+    async def test_set_unsupported_domain(self, mock_hass, minimal_config, mock_config_entry):
         """Test setting value on unsupported domain."""
-        number = FlowControlNumber(mock_hass, minimal_config, "test_entry")
+        number = FlowControlNumber(mock_hass, minimal_config, mock_config_entry)
 
         target_state = MagicMock()
         target_state.domain = "sensor"
@@ -398,9 +395,9 @@ class TestAsyncSetVorlaufSoll:
         mock_hass.services.async_call.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_set_rounds_value(self, mock_hass, minimal_config):
+    async def test_set_rounds_value(self, mock_hass, minimal_config, mock_config_entry):
         """Test that value is rounded correctly."""
-        number = FlowControlNumber(mock_hass, minimal_config, "test_entry")
+        number = FlowControlNumber(mock_hass, minimal_config, mock_config_entry)
 
         target_state = MagicMock()
         target_state.domain = "number"
@@ -419,9 +416,9 @@ class TestAsyncSetNativeValue:
     """Test async_set_native_value method."""
 
     @pytest.mark.asyncio
-    async def test_set_native_value(self, mock_hass, minimal_config):
+    async def test_set_native_value(self, mock_hass, minimal_config, mock_config_entry):
         """Test manual value override."""
-        number = FlowControlNumber(mock_hass, minimal_config, "test_entry")
+        number = FlowControlNumber(mock_hass, minimal_config, mock_config_entry)
         number.async_write_ha_state = Mock()
 
         target_state = MagicMock()
@@ -439,9 +436,9 @@ class TestAsyncUpdateVorlaufSoll:
     """Test _async_update_vorlauf_soll method."""
 
     @pytest.mark.asyncio
-    async def test_update_success(self, mock_hass, minimal_config):
+    async def test_update_success(self, mock_hass, minimal_config, mock_config_entry):
         """Test successful vorlauf soll update."""
-        number = FlowControlNumber(mock_hass, minimal_config, "test_entry")
+        number = FlowControlNumber(mock_hass, minimal_config, mock_config_entry)
         number.async_write_ha_state = Mock()
 
         mock_sensor_data = SensorValues(
@@ -486,9 +483,9 @@ class TestAsyncUpdateVorlaufSoll:
             number.async_write_ha_state.assert_called()
 
     @pytest.mark.asyncio
-    async def test_update_with_switch_enabled(self, mock_hass, minimal_config):
+    async def test_update_with_switch_enabled(self, mock_hass, minimal_config, mock_config_entry):
         """Test update when control switch is enabled."""
-        number = FlowControlNumber(mock_hass, minimal_config, "test_entry")
+        number = FlowControlNumber(mock_hass, minimal_config, mock_config_entry)
         number.async_write_ha_state = Mock()
 
         mock_sensor_data = SensorValues(
@@ -538,9 +535,9 @@ class TestAsyncUpdateVorlaufSoll:
             mock_set.assert_called_once_with(38.5)
 
     @pytest.mark.asyncio
-    async def test_update_sensors_unavailable(self, mock_hass, minimal_config):
+    async def test_update_sensors_unavailable(self, mock_hass, minimal_config, mock_config_entry):
         """Test update when sensors are unavailable."""
-        number = FlowControlNumber(mock_hass, minimal_config, "test_entry")
+        number = FlowControlNumber(mock_hass, minimal_config, mock_config_entry)
         number.async_write_ha_state = Mock()
 
         with patch.object(number, "_async_get_sensor_values", return_value=None):
@@ -550,9 +547,9 @@ class TestAsyncUpdateVorlaufSoll:
             number.async_write_ha_state.assert_called()
 
     @pytest.mark.asyncio
-    async def test_update_exception(self, mock_hass, minimal_config):
+    async def test_update_exception(self, mock_hass, minimal_config, mock_config_entry):
         """Test update with exception."""
-        number = FlowControlNumber(mock_hass, minimal_config, "test_entry")
+        number = FlowControlNumber(mock_hass, minimal_config, mock_config_entry)
         number.async_write_ha_state = Mock()
 
         with patch.object(
@@ -567,9 +564,9 @@ class TestAsyncUpdateVorlaufSoll:
 class TestExtraStateAttributes:
     """Test extra_state_attributes property."""
 
-    def test_extra_state_attributes(self, mock_hass, minimal_config):
+    def test_extra_state_attributes(self, mock_hass, minimal_config, mock_config_entry):
         """Test that extra state attributes are returned."""
-        number = FlowControlNumber(mock_hass, minimal_config, "test_entry")
+        number = FlowControlNumber(mock_hass, minimal_config, mock_config_entry)
         number._extra_attributes = {"test_attr": "test_value"}
 
         assert number.extra_state_attributes == {"test_attr": "test_value"}
@@ -578,16 +575,16 @@ class TestExtraStateAttributes:
 class TestAvailable:
     """Test available property."""
 
-    def test_available_true(self, mock_hass, minimal_config):
+    def test_available_true(self, mock_hass, minimal_config, mock_config_entry):
         """Test available property when entity is available."""
-        number = FlowControlNumber(mock_hass, minimal_config, "test_entry")
+        number = FlowControlNumber(mock_hass, minimal_config, mock_config_entry)
         number._available = True
 
         assert number.available is True
 
-    def test_available_false(self, mock_hass, minimal_config):
+    def test_available_false(self, mock_hass, minimal_config, mock_config_entry):
         """Test available property when entity is unavailable."""
-        number = FlowControlNumber(mock_hass, minimal_config, "test_entry")
+        number = FlowControlNumber(mock_hass, minimal_config, mock_config_entry)
         number._available = False
 
         assert number.available is False
@@ -597,9 +594,9 @@ class TestCreateTask:
     """Test _create_task method."""
 
     @pytest.mark.asyncio
-    async def test_create_task(self, mock_hass, minimal_config):
+    async def test_create_task(self, mock_hass, minimal_config, mock_config_entry):
         """Test task creation and tracking."""
-        number = FlowControlNumber(mock_hass, minimal_config, "test_entry")
+        number = FlowControlNumber(mock_hass, minimal_config, mock_config_entry)
 
         async def test_coro():
             await asyncio.sleep(0.01)

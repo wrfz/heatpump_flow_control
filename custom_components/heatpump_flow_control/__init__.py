@@ -1,8 +1,8 @@
 """Heatpump Flow Control Integration für Home Assistant."""
 
 import logging
-import pickle
 from pathlib import Path
+import pickle
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -35,14 +35,15 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: HeatpumpFlowControlConfigEntry
+    hass: HomeAssistant,
+    entry: HeatpumpFlowControlConfigEntry
 ) -> bool:
     """Set up Heatpump Flow Control from a config entry."""
     _LOGGER.info("async_setup_entry()")
 
     # Load or create FlowController
     controller = await _async_load_or_create_controller(hass, entry)
-    
+
     # Store in runtime_data
     entry.runtime_data = controller
 
@@ -58,16 +59,16 @@ async def _async_load_or_create_controller(
     hass: HomeAssistant, entry: ConfigEntry
 ) -> FlowController:
     """Load controller from disk or create new one."""
-    
+
     # Get configuration
     min_vorlauf = entry.data.get(CONF_MIN_VORLAUF, DEFAULT_MIN_VORLAUF_HI)
     max_vorlauf = entry.data.get(CONF_MAX_VORLAUF, DEFAULT_MAX_VORLAUF_LO)
     learning_rate = entry.data.get(CONF_LEARNING_RATE, DEFAULT_LEARNING_RATE)
-    
+
     # Model file path
     model_file_name = f"{DOMAIN}_{entry.entry_id}.model.pkl"
     model_path = Path(hass.config.path(model_file_name))
-    
+
     def _load() -> FlowController | None:
         """Load model from disk."""
         _LOGGER.info("Loading model from %s", model_path)
@@ -113,10 +114,10 @@ async def _async_load_or_create_controller(
                 err,
             )
             return None
-    
+
     # Load controller from disk
     loaded_controller = await hass.async_add_executor_job(_load)
-    
+
     if loaded_controller:
         # Update configuration parameters from current config
         loaded_controller.update_config(
@@ -125,7 +126,7 @@ async def _async_load_or_create_controller(
             learning_rate=learning_rate,
         )
         return loaded_controller
-    
+
     # Create new controller
     _LOGGER.info("Creating new FlowController")
     return FlowController(
@@ -136,13 +137,15 @@ async def _async_load_or_create_controller(
 
 
 async def async_save_controller(
-    hass: HomeAssistant, entry: ConfigEntry, controller: FlowController
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    controller: FlowController
 ) -> None:
     """Save controller to disk."""
-    
+
     model_file_name = f"{DOMAIN}_{entry.entry_id}.model.pkl"
     model_path = Path(hass.config.path(model_file_name))
-    
+
     def _save():
         """Save model to disk."""
         try:
@@ -151,7 +154,7 @@ async def async_save_controller(
             with model_path.open("wb") as f:
                 _LOGGER.debug("Saving model to %s", model_path)
                 pickle.dump(controller, f)
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001
             _LOGGER.error("Error saving model: %s", err)
 
     await hass.async_add_executor_job(_save)
