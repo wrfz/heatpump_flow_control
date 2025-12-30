@@ -246,9 +246,6 @@ class FlowController:
                                 vorlauf_ist=vorlauf_ist_value,
                                 raum_abweichung=raum_abweichung,
                                 aussen_trend_1h=0.0,
-                                aussen_trend_2h=0.0,
-                                aussen_trend_3h=0.0,
-                                aussen_trend_6h=0.0,
                                 stunde_sin=0.0,
                                 stunde_cos=1.0,
                                 wochentag_sin=0.0,
@@ -269,19 +266,6 @@ class FlowController:
             synthetic_count,
             SYNTHETIC_WEIGHT,
         )
-
-    def _berechne_trends(self) -> dict[str, float]:
-        """Berechnet zeitnormierte Temperatur-Trends in °C/Stunde.
-
-        Returns:
-            Dict mit Trend-Werten (°C/Stunde)
-        """
-        return {
-            "aussen_trend_1h": self.aussen_temp_history.get_trend(hours=1.0),
-            "aussen_trend_2h": self.aussen_temp_history.get_trend(hours=2.0),
-            "aussen_trend_3h": self.aussen_temp_history.get_trend(hours=3.0),
-            "aussen_trend_6h": self.aussen_temp_history.get_trend(hours=6.0),
-        }
 
     def _erstelle_features(
         self,
@@ -331,9 +315,6 @@ class FlowController:
                 while history and history[0].timestamp < cutoff_longterm:
                     history.popleft()
 
-        # Berechne Trends
-        #trends = self._berechne_trends()
-
         # Raum-Abweichung
         raum_abweichung = sensor_values.raum_soll - sensor_values.raum_ist
 
@@ -353,10 +334,7 @@ class FlowController:
             raum_soll = sensor_values.raum_soll,
             vorlauf_ist = sensor_values.vorlauf_ist,
             raum_abweichung = raum_abweichung,
-            aussen_trend_1h=0.0,  # Default: kein Trend
-            aussen_trend_2h=0.0,
-            aussen_trend_3h=0.0,
-            aussen_trend_6h=0.0,
+            aussen_trend_1h = self.aussen_temp_history.get_trend(hours=1.0),
             stunde_sin = stunde_sin,
             stunde_cos = stunde_cos,
             wochentag_sin = wochentag_sin,

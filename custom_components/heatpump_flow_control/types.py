@@ -114,22 +114,19 @@ class Trends:
 class Features:
     """Model features."""
 
-    aussen_temp: float = 0.0
-    raum_ist: float = 0.0
-    raum_soll: float = 0.0
-    vorlauf_ist: float = 0.0
-    raum_abweichung: float = 0.0
-    aussen_trend_1h: float = 0.0
-    aussen_trend_2h: float = 0.0
-    aussen_trend_3h: float = 0.0
-    aussen_trend_6h: float = 0.0
-    stunde_sin: float = 0.0
-    stunde_cos: float = 0.0
-    wochentag_sin: float = 0.0
-    wochentag_cos: float = 0.0
+    aussen_temp: float
+    raum_ist: float
+    raum_soll: float
+    vorlauf_ist: float
+    raum_abweichung: float
+    aussen_trend_1h: float
+    stunde_sin: float
+    stunde_cos: float
+    wochentag_sin: float
+    wochentag_cos: float
     # Interaktions-Features
-    temp_diff: float = 0.0
-    vorlauf_raum_diff: float = 0.0
+    temp_diff: float
+    vorlauf_raum_diff: float
 
     def to_dict(self) -> dict[str, float]:
         """Gibt die Features als Dictionary zurück."""

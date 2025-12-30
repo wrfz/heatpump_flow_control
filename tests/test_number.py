@@ -24,6 +24,7 @@ from custom_components.heatpump_flow_control.flow_controller import (
 from custom_components.heatpump_flow_control.number import (
     FlowControlNumber,
     SensorValues,
+    VorlaufSollAndFeatures,
 )
 import pytest
 
@@ -466,9 +467,6 @@ class TestAsyncUpdateVorlaufSoll:
                 vorlauf_ist=35.0,
                 raum_abweichung=-1.0,
                 aussen_trend_1h=0.5,
-                aussen_trend_2h=0.3,
-                aussen_trend_3h=0.2,
-                aussen_trend_6h=0.1,
                 stunde_sin=0.0,
                 stunde_cos=1.0,
                 wochentag_sin=0.0,
@@ -477,7 +475,7 @@ class TestAsyncUpdateVorlaufSoll:
                 vorlauf_raum_diff=13.0,
             )
             mock_hass.async_add_executor_job.side_effect = [
-                (38.5, mock_features),  # berechne_vorlauf_soll
+                VorlaufSollAndFeatures(vorlauf=38.5, features=mock_features),  # berechne_vorlauf_soll
                 None,  # save_model
             ]
 
@@ -519,9 +517,6 @@ class TestAsyncUpdateVorlaufSoll:
                 vorlauf_ist=35.0,
                 raum_abweichung=-1.0,
                 aussen_trend_1h=0.5,
-                aussen_trend_2h=0.3,
-                aussen_trend_3h=0.2,
-                aussen_trend_6h=0.1,
                 stunde_sin=0.0,
                 stunde_cos=1.0,
                 wochentag_sin=0.0,
@@ -530,7 +525,7 @@ class TestAsyncUpdateVorlaufSoll:
                 vorlauf_raum_diff=13.0,
             )
             mock_hass.async_add_executor_job.side_effect = [
-                (38.5, mock_features),  # berechne_vorlauf_soll
+                VorlaufSollAndFeatures(vorlauf=38.5, features=mock_features),  # berechne_vorlauf_soll
                 None,  # save_model
             ]
 

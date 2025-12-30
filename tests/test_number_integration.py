@@ -23,6 +23,7 @@ from custom_components.heatpump_flow_control.const import (
 from custom_components.heatpump_flow_control.flow_controller import (
     Features,
     FlowController,
+    VorlaufSollAndFeatures,
 )
 from custom_components.heatpump_flow_control.number import FlowControlNumber
 import pytest
@@ -210,11 +211,18 @@ class TestFlowControlNumberIntegration:
 
         # Mock controller calculation
         mock_features = Features(
-            raum_abweichung = 1.0,
-            aussen_trend_1h = 0.5,
-            aussen_trend_2h = 0.3,
-            aussen_trend_3h = 0.2,
-            aussen_trend_6h = 0.1,
+            aussen_temp=5.0,
+            raum_ist=22.0,
+            raum_soll=21.0,
+            vorlauf_ist=35.0,
+            raum_abweichung=-1.0,
+            aussen_trend_1h=0.5,
+            stunde_sin=0.0,
+            stunde_cos=1.0,
+            wochentag_sin=0.0,
+            wochentag_cos=1.0,
+            temp_diff=-17.0,
+            vorlauf_raum_diff=13.0,
         )
         mock_hass.async_add_executor_job.return_value = (38.5, mock_features)
 
@@ -277,14 +285,21 @@ class TestFlowControllerIntegration:
         number.async_write_ha_state = Mock()
 
         # Mock successful update
-        mock_hass.async_add_executor_job.return_value = (
-            38.5,
-            Features(
-                raum_abweichung = 1.0,
-                aussen_trend_1h = 0.5,
-                aussen_trend_2h = 0.3,
-                aussen_trend_3h = 0.2,
-                aussen_trend_6h = 0.1,
+        mock_hass.async_add_executor_job.return_value = VorlaufSollAndFeatures(
+            vorlauf=38.5,
+            features=Features(
+                aussen_temp=5.0,
+                raum_ist=22.0,
+                raum_soll=21.0,
+                vorlauf_ist=35.0,
+                raum_abweichung=-1.0,
+                aussen_trend_1h=0.5,
+                stunde_sin=0.0,
+                stunde_cos=1.0,
+                wochentag_sin=0.0,
+                wochentag_cos=1.0,
+                temp_diff=-17.0,
+                vorlauf_raum_diff=13.0,
             ),
         )
 

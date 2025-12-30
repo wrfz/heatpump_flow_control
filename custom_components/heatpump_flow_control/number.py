@@ -1,6 +1,6 @@
 """Number platform for Heatpump Flow Control integration."""
 import asyncio
-from datetime import datetime, timedelta
+from datetime import timedelta
 import logging
 from pathlib import Path
 import pickle
@@ -55,7 +55,7 @@ from .const import (
     DOMAIN,
 )
 from .flow_controller import PICKLE_VERSION, FlowController
-from .types import SensorValues
+from .types import SensorValues, VorlaufSollAndFeatures
 
 # pylint: disable=hass-logger-capital, hass-logger-period
 # ruff: noqa: BLE001
@@ -441,13 +441,13 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
                 return
 
             # Berechne neuen Vorlauf-Soll
-            vorlauf_soll, features = await self.hass.async_add_executor_job(
+            vorlauf_soll_and_features: VorlaufSollAndFeatures = await self.hass.async_add_executor_job(
                 self._controller.berechne_vorlauf_soll,
                 sensor_values,
             )
 
             # Update state
-            self._attr_native_value = round(vorlauf_soll, 1)
+            self._attr_native_value = round(vorlauf_soll_and_features.vorlauf, 1)
             self._last_update = dt_util.now()
             self._next_update = self._last_update + timedelta(
                 minutes=self._update_interval_minutes
@@ -472,11 +472,8 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
                 ATTR_RAUM_IST: round(sensor_values.raum_ist, 1),
                 ATTR_RAUM_SOLL: round(sensor_values.raum_soll, 1),
                 ATTR_VORLAUF_IST: round(sensor_values.vorlauf_ist, 1),
-                ATTR_RAUM_ABWEICHUNG: round(features.raum_abweichung, 2),
-                ATTR_AUSSEN_TREND_1H: round(features.aussen_trend_1h, 3),
-                ATTR_AUSSEN_TREND_2H: round(features.aussen_trend_2h, 3),
-                ATTR_AUSSEN_TREND_3H: round(features.aussen_trend_3h, 3),
-                ATTR_AUSSEN_TREND_6H: round(features.aussen_trend_6h, 3),
+                ATTR_RAUM_ABWEICHUNG: round(vorlauf_soll_and_features.features.raum_abweichung, 2),
+                ATTR_AUSSEN_TREND_1H: round(vorlauf_soll_and_features.features.aussen_trend_1h, 3),
                 ATTR_MODEL_MAE: round(model_statistics.mae, 2),
                 ATTR_LAST_UPDATE: self._last_update.isoformat(),
                 ATTR_NEXT_UPDATE: self._next_update.isoformat(),
@@ -513,7 +510,7 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
             )
 
             if switch_state and switch_state.state == "on":
-                await self._async_set_vorlauf_soll(vorlauf_soll)
+                await self._async_set_vorlauf_soll(vorlauf_soll_and_features.vorlauf)
                 _LOGGER.info("Control enabled, sending Vorlauf-Soll to heat pump")
             else:
                 _LOGGER.info("Control disabled by switch, not sending Vorlauf-Soll")
@@ -522,7 +519,7 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
 
             _LOGGER.info(
                 "Vorlauf-Soll updated: %.1f°C (Außen: %.1f°C, Raum: %.1f/%.1f°C)",
-                vorlauf_soll,
+                vorlauf_soll_and_features.vorlauf,
                 sensor_values.aussen_temp,
                 sensor_values.raum_ist,
                 sensor_values.raum_soll,

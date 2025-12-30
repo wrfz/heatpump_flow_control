@@ -119,9 +119,6 @@ class TestFeatureCreation:
         # Trends should be calculated (may be 0 with insufficient data)
         # Just check they exist
         assert features.aussen_trend_1h is not None
-        assert features.aussen_trend_2h is not None
-        assert features.aussen_trend_3h is not None
-        assert features.aussen_trend_6h is not None
 
 class TestPrediction:
     """Test prediction logic."""
