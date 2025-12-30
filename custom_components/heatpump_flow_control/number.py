@@ -2,12 +2,9 @@
 import asyncio
 from datetime import timedelta
 import logging
-from pathlib import Path
-import pickle
 from typing import Any, cast
 
 from homeassistant.components.number import NumberEntity, NumberMode
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant, State, callback
 from homeassistant.helpers import entity_registry as er
@@ -23,6 +20,8 @@ from homeassistant.helpers.event import (
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import dt as dt_util
 
+from . import HeatpumpFlowControlConfigEntry, async_save_controller
+from .common import get_device_info
 from .const import (
     ATTR_AUSSEN_TEMP,
     ATTR_AUSSEN_TREND_1H,
@@ -35,22 +34,15 @@ from .const import (
     ATTR_VORLAUF_IST,
     CONF_AUSSEN_TEMP_SENSOR,
     CONF_IS_HEATING_ENTITY,
-    CONF_LEARNING_RATE,
-    CONF_MAX_VORLAUF,
-    CONF_MIN_VORLAUF,
     CONF_RAUM_IST_SENSOR,
     CONF_RAUM_SOLL_SENSOR,
     CONF_UPDATE_INTERVAL,
     CONF_VORLAUF_IST_SENSOR,
     CONF_VORLAUF_SOLL_ENTITY,
     DEFAULT_BETRIEBSART_HEIZEN_WERT,
-    DEFAULT_LEARNING_RATE,
-    DEFAULT_MAX_VORLAUF_LO,
-    DEFAULT_MIN_VORLAUF_HI,
     DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
 )
-from .flow_controller import PICKLE_VERSION, FlowController
 from .types import SensorValues, VorlaufSollAndFeatures
 
 # pylint: disable=hass-logger-capital, hass-logger-period
@@ -61,7 +53,7 @@ _LOGGER = logging.getLogger(__name__)
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
+    config_entry: HeatpumpFlowControlConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the Flow Control number."""
@@ -70,7 +62,7 @@ async def async_setup_entry(
     number = FlowControlNumber(
         hass=hass,
         config=config,
-        entry_id=config_entry.entry_id,
+        config_entry=config_entry,
     )
 
     async_add_entities([number], True)
@@ -87,12 +79,14 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
         self,
         hass: HomeAssistant,
         config: Mapping[str, Any],
-        entry_id: str,
+        config_entry: HeatpumpFlowControlConfigEntry,
     ) -> None:
         """Initialize the number."""
         self.hass = hass
         self._config = config
-        self._entry_id = entry_id
+        self._config_entry = config_entry
+
+        self._attr_device_info = get_device_info(config_entry.entry_id)
 
         # Sensor Entities
         self._aussen_temp_sensor = config[CONF_AUSSEN_TEMP_SENSOR]
@@ -103,22 +97,8 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
         self._is_heating_entity = config.get(CONF_IS_HEATING_ENTITY)
 
         # Konfiguration
-        self._min_vorlauf = config.get(CONF_MIN_VORLAUF, DEFAULT_MIN_VORLAUF_HI)
-        self._max_vorlauf = config.get(CONF_MAX_VORLAUF, DEFAULT_MAX_VORLAUF_LO)
         self._update_interval_minutes = config.get(
             CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL
-        )
-        self._learning_rate = config.get(CONF_LEARNING_RATE, DEFAULT_LEARNING_RATE)
-
-        # Pfad für die Model-Datei
-        model_file_name = f"{DOMAIN}_{entry_id}.model.pkl"
-        self._model_path = Path(self.hass.config.path(model_file_name))
-
-        # Flow Controller
-        self._controller = FlowController(
-            min_vorlauf=self._min_vorlauf,
-            max_vorlauf=self._max_vorlauf,
-            learning_rate=self._learning_rate,
         )
 
         # State
@@ -139,18 +119,22 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
 
         # Number properties
         self._attr_name = "Heatpump Flow Control Vorlauf Soll"
-        self._attr_unique_id = f"{DOMAIN}_{entry_id}_vorlauf_soll"
-        self._attr_native_min_value = self._min_vorlauf
-        self._attr_native_max_value = self._max_vorlauf
+        self._attr_unique_id = f"{DOMAIN}_{config_entry.entry_id}_vorlauf_soll"
+        # Get min/max from controller
+        self._attr_native_min_value = config_entry.runtime_data.min_vorlauf
+        self._attr_native_max_value = config_entry.runtime_data.max_vorlauf
         self._attr_native_step = 0.5
 
         self._tasks: set[asyncio.Task[None]] = set()
 
+    @property
+    def _controller(self):
+        """Get FlowController from runtime_data."""
+        return self._config_entry.runtime_data
+
     async def async_added_to_hass(self) -> None:
         """Run when entity about to be added to hass."""
         _LOGGER.info("async_added_to_hass()")
-
-        await self._async_load_model()
 
         await super().async_added_to_hass()
 
@@ -239,82 +223,6 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
         """First update after startup with delay."""
         await asyncio.sleep(5)
         await self._async_update_vorlauf_soll()
-
-    async def _async_load_model(self) -> None:
-        """Lädt das Modell."""
-
-        _LOGGER.info("_async_load_model()")
-
-        def _load() -> FlowController | None:
-            _LOGGER.info("Loading model from %s", self._model_path)
-
-            if not self._model_path.exists():
-                _LOGGER.info("No saved model found, starting fresh")
-                return None
-
-            try:
-                with self._model_path.open("rb") as f:
-                    loaded = pickle.load(f)
-
-                    # Prüfe pickle Version für Migrations-Check
-                    loaded_version = getattr(loaded, "pickle_version", 1)
-                    if loaded_version < PICKLE_VERSION:
-                        _LOGGER.warning(
-                            "Model version mismatch (loaded: %d, current: %d). "
-                            "Starting fresh to ensure compatibility.",
-                            loaded_version,
-                            PICKLE_VERSION,
-                        )
-                        return None
-
-                    # Migrationscode für fehlende Attribute (falls Version gleich)
-                    if not hasattr(loaded, "use_fallback"):
-                        _LOGGER.info("Migrating: Adding use_fallback attribute")
-                        loaded.use_fallback = False
-
-                    # Legacy-Patches für alte Modelle
-                    loaded.use_fallback = False
-                    loaded.min_predictions_for_model = 0
-
-                    _LOGGER.info(
-                        "Model loaded successfully (version %d, predictions: %d)",
-                        loaded_version,
-                        loaded.predictions_count,
-                    )
-                    return loaded
-            except (pickle.UnpicklingError, EOFError, AttributeError) as err:
-                _LOGGER.error(
-                    "Cannot load model (incompatible format or missing attributes): %s. "
-                    "Starting fresh.",
-                    err,
-                )
-                return None
-
-        loaded_controller = await self.hass.async_add_executor_job(_load)
-        if loaded_controller:
-            # Update configuration parameters from current config
-            # This allows config changes without breaking pickle compatibility
-            loaded_controller.update_config(
-                min_vorlauf=self._min_vorlauf,
-                max_vorlauf=self._max_vorlauf,
-                learning_rate=self._learning_rate,
-            )
-            self._controller = loaded_controller
-
-    async def _async_save_model(self) -> None:
-        """Speichert das Modell."""
-
-        def _save():
-            try:
-                self._model_path.parent.mkdir(parents=True, exist_ok=True)
-
-                with self._model_path.open("wb") as f:
-                    _LOGGER.debug("Saving model to %s", self._model_path)
-                    pickle.dump(self._controller, f)
-            except Exception as err:
-                _LOGGER.error("Error saving model: %s", err)
-
-        await self.hass.async_add_executor_job(_save)
 
     @callback
     def _async_sensor_state_changed(self, event) -> None:
@@ -551,7 +459,7 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
             )
 
             # Nach Berechnung speichern (Feature-Lernen passiert intern im Controller)
-            await self._async_save_model()
+            await async_save_controller(self.hass, self._config_entry, self._controller)
 
         except Exception:
             _LOGGER.exception("Error updating Vorlauf-Soll")

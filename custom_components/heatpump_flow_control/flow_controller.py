@@ -146,6 +146,19 @@ class FlowController:
 
         # Note: Configuration parameters must be set via update_config() after unpickling
 
+    @property
+    def enabled(self):
+        """Return whether the controller is enabled."""
+
+        return self._enabled
+
+    @enabled.setter
+    def enabled(self, value: bool):
+        """Set whether the controller is enabled."""
+
+        self._enabled = value
+        _LOGGER.debug("Controller Status geändert: %s", value)
+
     def update_config(
         self,
         min_vorlauf: float,
@@ -423,6 +436,10 @@ class FlowController:
         """
 
         _LOGGER.info("berechne_vorlauf_soll()")
+        #if not self._enabled:
+        #    _LOGGER.info("Controller ist deaktiviert, verwende Fallback-Heizkurve")
+        #    features = self._erstelle_features(sensor_values)
+        #    return VorlaufSollAndFeatures(vorlauf=vorlauf_soll, features=features)
 
         features = self._erstelle_features(sensor_values)
 
