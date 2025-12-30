@@ -5,8 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 from custom_components.heatpump_flow_control.const import (
     CONF_AUSSEN_TEMP_SENSOR,
-    CONF_BETRIEBSART_HEIZEN_WERT,
-    CONF_BETRIEBSART_SENSOR,
+    CONF_IS_HEATING_ENTITY,
     CONF_LEARNING_RATE,
     CONF_MAX_VORLAUF,
     CONF_MIN_VORLAUF,
@@ -15,7 +14,6 @@ from custom_components.heatpump_flow_control.const import (
     CONF_UPDATE_INTERVAL,
     CONF_VORLAUF_IST_SENSOR,
     CONF_VORLAUF_SOLL_ENTITY,
-    DEFAULT_BETRIEBSART_HEIZEN_WERT,
 )
 from custom_components.heatpump_flow_control.flow_controller import (
     Features,
@@ -58,8 +56,7 @@ def full_config(minimal_config):
     config = minimal_config.copy()
     config.update(
         {
-            CONF_BETRIEBSART_SENSOR: "sensor.betriebsart",
-            CONF_BETRIEBSART_HEIZEN_WERT: "Heizen",
+            CONF_IS_HEATING_ENTITY: "sensor.betriebsart",
             CONF_MIN_VORLAUF: 25.0,
             CONF_MAX_VORLAUF: 50.0,
             CONF_UPDATE_INTERVAL: 60,
@@ -82,7 +79,7 @@ class TestFlowControlNumberInit:
         assert number._raum_soll_sensor == "sensor.raum_soll"
         assert number._vorlauf_ist_sensor == "sensor.vorlauf_ist"
         assert number._vorlauf_soll_entity == "number.vorlauf_soll"
-        assert number._betriebsart_sensor is None
+        assert number._is_heating_entity is None
         assert isinstance(number._controller, FlowController)
         assert number._attr_native_value is None
         assert number._available is False
@@ -91,8 +88,7 @@ class TestFlowControlNumberInit:
         """Test initialization with full config."""
         number = FlowControlNumber(mock_hass, full_config, "test_entry")
 
-        assert number._betriebsart_sensor == "sensor.betriebsart"
-        assert number._betriebsart_heizen_wert == "Heizen"
+        assert number._is_heating_entity == "sensor.betriebsart"
         assert number._min_vorlauf == 25.0
         assert number._max_vorlauf == 50.0
         assert number._update_interval_minutes == 60
@@ -102,7 +98,6 @@ class TestFlowControlNumberInit:
         """Test that default values are applied correctly."""
         number = FlowControlNumber(mock_hass, minimal_config, "test_entry")
 
-        assert number._betriebsart_heizen_wert == DEFAULT_BETRIEBSART_HEIZEN_WERT
         assert number._attr_native_min_value == number._min_vorlauf
         assert number._attr_native_max_value == number._max_vorlauf
         assert number._attr_native_step == 0.5

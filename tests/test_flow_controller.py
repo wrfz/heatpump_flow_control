@@ -415,13 +415,6 @@ class FlowTestHelper:
                 )
             )
 
-            # Add current room temperature to longterm history for reward learning
-            # This allows _lerne_aus_erfahrungen() (called internally by berechne_vorlauf_soll)
-            # to evaluate past experiences against current room temperature
-            self.flow_controller.raum_temp_longterm.append(
-                (self._simulated_datetime, self._raum_ist)
-            )
-
             # Store state for optional history learning
             self._history_states.append({
                 'timestamp': self._simulated_datetime,

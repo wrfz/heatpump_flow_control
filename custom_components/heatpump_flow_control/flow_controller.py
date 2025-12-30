@@ -66,9 +66,6 @@ class FlowController:
         # Initialize all attributes (will be set in _setup())
         self.erfahrungs_liste: list[Erfahrung] = []  # Speichert alle Predictions mit Features
         self.aussen_temp_history: HistoryBuffer = HistoryBuffer()
-        self.aussen_temp_longterm: HistoryBuffer = HistoryBuffer()
-        self.vorlauf_longterm: HistoryBuffer = HistoryBuffer()
-        self.raum_temp_longterm: HistoryBuffer = HistoryBuffer()
 
         self._setup()
 
@@ -91,9 +88,6 @@ class FlowController:
 
         # Langzeit-Historie (1 Woche)
         self.longterm_history_days = 7
-        self.aussen_temp_longterm = HistoryBuffer()  # Speichert (timestamp, temp) Tupel
-        self.vorlauf_longterm = HistoryBuffer()  # Speichert (timestamp, vorlauf) Tupel
-        self.raum_temp_longterm = HistoryBuffer()  # Speichert (timestamp, raum_temp) Tupel
 
         # Metriken
         self.metric = metrics.MAE()
@@ -133,9 +127,6 @@ class FlowController:
 
             # Temperature histories for trend calculation
             "aussen_temp_history": self.aussen_temp_history,
-            "aussen_temp_longterm": self.aussen_temp_longterm,
-            "vorlauf_longterm": self.vorlauf_longterm,
-            "raum_temp_longterm": self.raum_temp_longterm,
         }
 
     def __setstate__(self, state: dict[str, Any]) -> None:
@@ -153,9 +144,6 @@ class FlowController:
         self.metric = state["metric"]
         self.erfahrungs_liste = state["erfahrungs_liste"]
         self.aussen_temp_history = state["aussen_temp_history"]
-        self.aussen_temp_longterm = state["aussen_temp_longterm"]
-        self.vorlauf_longterm = state["vorlauf_longterm"]
-        self.raum_temp_longterm = state["raum_temp_longterm"]
 
         # Note: Configuration parameters must be set via update_config() after unpickling
 
@@ -291,29 +279,6 @@ class FlowController:
 
         while self.aussen_temp_history and self.aussen_temp_history.first.timestamp < cutoff_time:
             self.aussen_temp_history.popleft()
-
-        # Langzeit-Historie aktualisieren (nur alle 30 Min)
-        # Entferne alte Einträge basierend auf Tagen statt fester Anzahl
-        cutoff_longterm = now - timedelta(days=self.longterm_history_days)
-
-        if (
-            not self.aussen_temp_longterm
-            or (now - self.aussen_temp_longterm[-1].timestamp).total_seconds() > 1800
-        ):
-            self.aussen_temp_longterm.append(DateTimeTemperatur(timestamp=now, temperature=sensor_values.aussen_temp))
-            self.vorlauf_longterm.append(DateTimeTemperatur(timestamp=now, temperature=sensor_values.vorlauf_ist))
-            self.raum_temp_longterm.append(DateTimeTemperatur(timestamp=now, temperature=sensor_values.raum_ist))
-
-            histories = [
-                self.aussen_temp_longterm,
-                self.vorlauf_longterm,
-                self.raum_temp_longterm
-            ]
-
-            # Entferne alte Einträge basierend auf Zeit
-            for history in histories:
-                while history and history[0].timestamp < cutoff_longterm:
-                    history.popleft()
 
         # Raum-Abweichung
         raum_abweichung = sensor_values.raum_soll - sensor_values.raum_ist

@@ -8,8 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 from custom_components.heatpump_flow_control.const import (
     CONF_AUSSEN_TEMP_SENSOR,
-    CONF_BETRIEBSART_HEIZEN_WERT,
-    CONF_BETRIEBSART_SENSOR,
+    CONF_IS_HEATING_ENTITY,
     CONF_LEARNING_RATE,
     CONF_MAX_VORLAUF,
     CONF_MIN_VORLAUF,
@@ -71,8 +70,7 @@ def full_config(minimal_config):
     config = minimal_config.copy()
     config.update(
         {
-            CONF_BETRIEBSART_SENSOR: "sensor.betriebsart",
-            CONF_BETRIEBSART_HEIZEN_WERT: "Heizen",
+            CONF_IS_HEATING_ENTITY: "sensor.betriebsart",
             CONF_MIN_VORLAUF: 25.0,
             CONF_MAX_VORLAUF: 50.0,
             CONF_UPDATE_INTERVAL: 60,
@@ -224,7 +222,10 @@ class TestFlowControlNumberIntegration:
             temp_diff=-17.0,
             vorlauf_raum_diff=13.0,
         )
-        mock_hass.async_add_executor_job.return_value = (38.5, mock_features)
+        mock_hass.async_add_executor_job.return_value = VorlaufSollAndFeatures(
+            vorlauf=38.5,
+            features=mock_features
+        )
 
         # Trigger update through public interface
         await number._async_update_vorlauf_soll()

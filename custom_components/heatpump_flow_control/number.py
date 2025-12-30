@@ -37,8 +37,7 @@ from .const import (
     ATTR_RAUM_SOLL,
     ATTR_VORLAUF_IST,
     CONF_AUSSEN_TEMP_SENSOR,
-    CONF_BETRIEBSART_HEIZEN_WERT,
-    CONF_BETRIEBSART_SENSOR,
+    CONF_IS_HEATING_ENTITY,
     CONF_LEARNING_RATE,
     CONF_MAX_VORLAUF,
     CONF_MIN_VORLAUF,
@@ -104,10 +103,7 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
         self._raum_soll_sensor = config[CONF_RAUM_SOLL_SENSOR]
         self._vorlauf_ist_sensor = config[CONF_VORLAUF_IST_SENSOR]
         self._vorlauf_soll_entity = config[CONF_VORLAUF_SOLL_ENTITY]
-        self._betriebsart_sensor = config.get(CONF_BETRIEBSART_SENSOR)
-        self._betriebsart_heizen_wert = config.get(
-            CONF_BETRIEBSART_HEIZEN_WERT, DEFAULT_BETRIEBSART_HEIZEN_WERT
-        )
+        self._is_heating_entity = config.get(CONF_IS_HEATING_ENTITY)
 
         # Konfiguration
         self._min_vorlauf = config.get(CONF_MIN_VORLAUF, DEFAULT_MIN_VORLAUF)
@@ -135,9 +131,14 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
         self._next_update = None
         self._available = False
 
+        # Heating mode tracking
+        self._heating_resumed_at = None  # Track when heating resumed
+        self._last_prediction_time = None  # Track last successful prediction
+
         # Listener
         self._update_interval_listener = None
         self._state_change_listener = None
+        self._heating_state_listener = None
 
         # Number properties
         self._attr_name = "Heatpump Flow Control Vorlauf Soll"
@@ -188,6 +189,14 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
             self._async_sensor_state_changed,
         )
 
+        # Setup heating state change listener if configured
+        if self._is_heating_entity:
+            self._heating_state_listener = async_track_state_change_event(
+                self.hass,
+                [self._is_heating_entity],
+                self._async_heating_state_changed,
+            )
+
         # Sofortiges erstes Update nach 5 Sekunden
         self._create_task(self._delayed_first_update())
 
@@ -210,6 +219,8 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
             self._update_interval_listener()
         if self._state_change_listener:
             self._state_change_listener()
+        if self._heating_state_listener:
+            self._heating_state_listener()
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -339,34 +350,30 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
         Returns:
             True if in heating mode or sensor not configured, False otherwise
         """
-        if not self._betriebsart_sensor:
+        if not self._is_heating_entity:
             return True  # Kein Sensor konfiguriert = immer lernen
 
-        betriebsart_state = self.hass.states.get(self._betriebsart_sensor)
-        if betriebsart_state is None:
+        is_heating_state = self.hass.states.get(self._is_heating_entity)
+        if is_heating_state is None:
             _LOGGER.warning(
                 "Betriebsart sensor %s not found, assuming heating disabled",
-                self._betriebsart_sensor,
+                self._is_heating_entity,
             )
             return False
 
-        if betriebsart_state.state in ("unavailable", "unknown"):
+        if is_heating_state.state in ("unavailable", "unknown"):
             _LOGGER.debug(
-                "Betriebsart sensor %s is %s, assuming heating disabled",
-                self._betriebsart_sensor,
-                betriebsart_state.state,
+                "Is_heating entity %s is %s, assuming heating disabled",
+                self._is_heating_entity,
+                is_heating_state.state,
             )
             return False
 
-        current_mode = betriebsart_state.state.strip()
-        is_heating = current_mode == self._betriebsart_heizen_wert
+        is_heating_str = is_heating_state.state.strip()
+        is_heating = is_heating_str == DEFAULT_BETRIEBSART_HEIZEN_WERT
 
         if not is_heating:
-            _LOGGER.debug(
-                "Betriebsart is '%s' (expected '%s'), not in heating mode",
-                current_mode,
-                self._betriebsart_heizen_wert,
-            )
+            _LOGGER.debug("is_heating is %s, not in heating mode", is_heating_str)
 
         return is_heating
 
@@ -433,6 +440,24 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
         _LOGGER.info("_async_update_vorlauf_soll()")
 
         try:
+            # If heating mode tracking enabled and in stabilization, skip
+            if self._heating_resumed_at is not None:
+                time_since_resume = (dt_util.now() - self._heating_resumed_at).total_seconds() / 60
+                if time_since_resume < 10.0:
+                    _LOGGER.info(
+                        "In stabilization (%.1f/10.0 min) - skipping update",
+                        time_since_resume
+                    )
+                    return
+
+            # Check if heating mode is disabled (if tracking enabled)
+            if self._is_heating_entity:
+                is_heating = await self._is_heating_mode()
+                if not is_heating:
+                    _LOGGER.info("Not in heating mode - skipping update")
+                    return
+
+            # Normal operation - proceed with prediction
             sensor_values = await self._async_get_sensor_values()
             if sensor_values is None:
                 _LOGGER.warning("sensor_values is None, setting unavailable")
@@ -445,6 +470,9 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
                 self._controller.berechne_vorlauf_soll,
                 sensor_values,
             )
+
+            # Track successful prediction time
+            self._last_prediction_time = dt_util.now()
 
             # Update state
             self._attr_native_value = round(vorlauf_soll_and_features.vorlauf, 1)
@@ -459,8 +487,8 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
 
             # Prüfe aktuelle Betriebsart
             current_betriebsart = None
-            if self._betriebsart_sensor:
-                betriebsart_state = self.hass.states.get(self._betriebsart_sensor)
+            if self._is_heating_entity:
+                betriebsart_state = self.hass.states.get(self._is_heating_entity)
                 if betriebsart_state and betriebsart_state.state not in (
                     "unavailable",
                     "unknown",
@@ -532,6 +560,43 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
             _LOGGER.exception("Error updating Vorlauf-Soll")
             self._available = False
             self.async_write_ha_state()
+
+    @callback
+    def _async_heating_state_changed(self, event) -> None:
+        """Handle heating mode state changes."""
+        new_state = event.data.get("new_state")
+        old_state = event.data.get("old_state")
+
+        if new_state is None or old_state is None:
+            return
+
+        new_is_heating = new_state.state.strip() == DEFAULT_BETRIEBSART_HEIZEN_WERT
+        old_is_heating = old_state.state.strip() == DEFAULT_BETRIEBSART_HEIZEN_WERT
+
+        # Only react to transition from off to on
+        if new_is_heating and not old_is_heating:
+            _LOGGER.info("Heating resumed after defrost")
+
+            # Check if update_interval has passed since last prediction
+            if self._last_prediction_time is not None:
+                time_since_last = (dt_util.now() - self._last_prediction_time).total_seconds() / 60
+                if time_since_last < self._update_interval_minutes:
+                    wait_time = self._update_interval_minutes - time_since_last
+                    _LOGGER.info(
+                        "Respecting update_interval: waiting %.1f more minutes (%.1f/%.1f min since last prediction)",
+                        wait_time,
+                        time_since_last,
+                        self._update_interval_minutes
+                    )
+                    # Stabilization will start at next scheduled update
+                    return
+
+            # update_interval passed or first run - start stabilization
+            self._heating_resumed_at = dt_util.now()
+            _LOGGER.info("Starting 10min stabilization period")
+        elif not new_is_heating and old_is_heating:
+            _LOGGER.info("Heating disabled (defrost started)")
+            self._heating_resumed_at = None
 
     async def _async_set_vorlauf_soll(self, value: float) -> None:
         """Set the Vorlauf-Soll on the target entity."""
