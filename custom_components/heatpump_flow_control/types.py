@@ -164,3 +164,10 @@ class VorlaufSollWeight:
 
     vorlauf_soll: float
     weight: float
+
+@dataclass
+class VorlaufSollAndFeatures:
+    """Vorlauf und zugehörige Features."""
+
+    vorlauf: float
+    features: Features

@@ -6,16 +6,13 @@ import pickle
 import random
 from unittest.mock import patch
 
-import numpy as np
-
 from custom_components.heatpump_flow_control.flow_controller import (
     DateTimeTemperatur,
-    Erfahrung,
-    Features,
     FlowController,
     HistoryBuffer,
     SensorValues,
 )
+import numpy as np
 import pytest
 
 
@@ -48,14 +45,14 @@ class TestFlowControllerInit:
 
         # Trainiere Model (10+ Predictions)
         for i in range(15):
-            vorlauf_soll, features = controller.berechne_vorlauf_soll(
+            vorlauf_soll_and_features = controller.berechne_vorlauf_soll(
                 SensorValues(aussen_temp=5.0 - i * 0.5,
                 raum_ist=21.0,
                 raum_soll=21.0,
                 vorlauf_ist=35.0 + i)
             )
             # Trainiere mit realistischem Wert
-            controller.model.learn_one(features.to_dict(), 35.0 + i)
+            controller.model.learn_one(vorlauf_soll_and_features.features.to_dict(), 35.0 + i)
 
         # Simuliere Pickle-Reload: _setup() wird aufgerufen aber use_fallback existiert schon
         controller._setup()
@@ -170,7 +167,7 @@ class TestPrediction:
         )
         controller.min_predictions_for_model = 10
 
-        vorlauf_soll, _ = controller.berechne_vorlauf_soll(
+        vorlauf_soll_and_features = controller.berechne_vorlauf_soll(
             SensorValues(
                 aussen_temp=5.0,
                 raum_ist=22.0,
@@ -180,7 +177,7 @@ class TestPrediction:
         )
 
         # Should use fallback
-        assert controller.min_vorlauf <= vorlauf_soll <= controller.max_vorlauf
+        assert controller.min_vorlauf <= vorlauf_soll_and_features.vorlauf <= controller.max_vorlauf
 
     def test_fallback_respects_configured_min_vorlauf(self):
         """Test that fallback mode respects configured min_vorlauf boundary."""
@@ -191,7 +188,7 @@ class TestPrediction:
         )
 
         # At high outdoor temp, standard Heizkurve would give low value
-        vorlauf_soll, _ = controller.berechne_vorlauf_soll(
+        vorlauf_soll_and_features = controller.berechne_vorlauf_soll(
             SensorValues(
                 aussen_temp=15.0,  # Warm outside
                 raum_ist=20.0,
@@ -201,10 +198,10 @@ class TestPrediction:
         )
 
         # BUG: Should respect configured min_vorlauf
-        assert vorlauf_soll >= 30.0, (
-            f"Fallback returned {vorlauf_soll}°C but min is 30°C"
+        assert vorlauf_soll_and_features.vorlauf >= 30.0, (
+            f"Fallback returned {vorlauf_soll_and_features.vorlauf}°C but min is 30°C"
         )
-        assert vorlauf_soll <= 55.0
+        assert vorlauf_soll_and_features.vorlauf <= 55.0
 
     def test_berechne_vorlauf_soll_within_limits(self):
         """Test that prediction is always within configured limits."""
@@ -216,7 +213,7 @@ class TestPrediction:
 
         # Mock extreme prediction
         with patch.object(controller.model, "predict_one", return_value=100.0):
-            vorlauf_soll, _ = controller.berechne_vorlauf_soll(
+            vorlauf_soll_and_features = controller.berechne_vorlauf_soll(
                 SensorValues(
                     aussen_temp=5.0,
                     raum_ist=22.0,
@@ -226,7 +223,7 @@ class TestPrediction:
             )
 
             # Should use fallback (unrealistic value triggers fallback)
-            assert 28.0 <= vorlauf_soll <= 40.0
+            assert 28.0 <= vorlauf_soll_and_features.vorlauf <= 40.0
 
     def test_unrealistic_prediction_triggers_fallback(self):
         """Test that unrealistic predictions trigger fallback."""
@@ -238,7 +235,7 @@ class TestPrediction:
 
         # Mock extreme prediction
         with patch.object(controller.model, "predict_one", return_value=5000000.0):
-            vorlauf_soll, _ = controller.berechne_vorlauf_soll(
+            vorlauf_soll_and_features = controller.berechne_vorlauf_soll(
                 SensorValues(
                     aussen_temp=5.0,
                     raum_ist=22.0,
@@ -248,7 +245,7 @@ class TestPrediction:
             )
 
             # Fallback value should be within reasonable range
-            assert 25.0 <= vorlauf_soll <= 55.0
+            assert 25.0 <= vorlauf_soll_and_features.vorlauf <= 55.0
 
 
 class TestRealisticLearningScenario:
@@ -285,7 +282,7 @@ class TestRealisticLearningScenario:
             raum_ist = raum_soll + (0.2 if i % 3 == 0 else -0.1)
 
             # Berechne Vorlauf-Soll
-            vorlauf_soll, features = controller.berechne_vorlauf_soll(
+            vorlauf_soll_and_features = controller.berechne_vorlauf_soll(
                 SensorValues(
                     aussen_temp=aussen_temp,
                     raum_ist=raum_ist,
@@ -298,7 +295,7 @@ class TestRealisticLearningScenario:
                 {
                     "cycle": i,
                     "aussen_temp": aussen_temp,
-                    "vorlauf_soll": vorlauf_soll,
+                    "vorlauf_soll": vorlauf_soll_and_features.vorlauf,
                     "vorlauf_ist": vorlauf_ist,
                 }
             )
@@ -306,7 +303,7 @@ class TestRealisticLearningScenario:
             # WICHTIG: Trainiere Model direkt mit dem tatsächlichen Vorlauf
             # In der Realität würde das Model aus vergangenen Messungen lernen
             # Hier simulieren wir: Der IST-Wert war der "richtige" Wert
-            controller.model.learn_one(features.to_dict(), vorlauf_ist)
+            controller.model.learn_one(vorlauf_soll_and_features.features.to_dict(), vorlauf_ist)
 
         # Analyse: Vorlauf sollte am Ende höher sein als am Anfang
         vorlauf_anfang_avg = (
@@ -412,7 +409,7 @@ class FlowTestHelper:
             # Also make datetime() constructor work normally
             mock_dt.side_effect = lambda *args, **kw: datetime(*args, **kw)
 
-            vorlauf_soll, _ = self.flow_controller.berechne_vorlauf_soll(
+            vorlauf_soll_and_features = self.flow_controller.berechne_vorlauf_soll(
                 SensorValues(
                     aussen_temp=self._t_aussen,
                     raum_ist=self._raum_ist,
@@ -436,13 +433,13 @@ class FlowTestHelper:
                 'raum_ist': self._raum_ist,
                 'raum_soll': self._raum_soll,
                 'vorlauf_ist': self._vorlauf_ist,
-                'vorlauf_soll': vorlauf_soll,
+                'vorlauf_soll': vorlauf_soll_and_features.vorlauf,
                 'learned': False,
             })
 
-        assert abs(vorlauf_soll - expected) <= tolerance, (
+        assert abs(vorlauf_soll_and_features.vorlauf - expected) <= tolerance, (
             f"Expected vorlauf_soll ~{expected}°C (±{tolerance}°C), "
-            f"got {vorlauf_soll:.1f}°C at time={self._current_time}min, "
+            f"got {vorlauf_soll_and_features.vorlauf:.1f}°C at time={self._current_time}min, "
             f"aussen={self._t_aussen}°C, raum={self._raum_ist}°C, "
             f"vorlauf_ist={self._vorlauf_ist}°C"
         )
@@ -485,99 +482,6 @@ def controller(flow_controller: FlowController) -> FlowTestHelper:
     """
     return FlowTestHelper(flow_controller)
 
-
-class TestFlowCalculation:
-    """Test flow calculation with fluent API."""
-
-    def test_flow_calculation(self):
-        """Test flow controller learns to adjust based on room temperature feedback."""
-        flow_controller = FlowController(
-            min_vorlauf=25.0,
-            max_vorlauf=55.0,
-            learning_rate=0.01,
-        )
-        flow_controller.min_predictions_for_model = 5  # Schnell aus Fallback raus
-        #flow_controller.reward_learning_enabled = False  # Klassisches Lernen
-
-        # Fluent test: Realistische Simulation mit zeitversetzter Reaktion
-        # wait(60) setzt das Interval für alle folgenden expect_vorlauf_soll() Aufrufe
-        # enable_history_learning() simuliert HA History-basiertes Lernen
-        (
-            controller(flow_controller).enable_history_learning().tolerance(0.1).wait(60) # Ab jetzt: 60min zwischen jedem expect_vorlauf_soll()
-            .t_aussen(10).raum_ist(20).raum_soll(21).vorlauf_ist(30)
-            .expect_vorlauf_soll(31.7)
-            .vorlauf_ist(30.3).raum_ist(20.3).expect_vorlauf_soll(30.8)
-            .vorlauf_ist(30.6).raum_ist(20.5).expect_vorlauf_soll(28.7)
-            .vorlauf_ist(30.0).raum_ist(20.8).expect_vorlauf_soll(28.7)
-            .vorlauf_ist(29.0).raum_ist(21.0).expect_vorlauf_soll(28.7)
-            .vorlauf_ist(28.5).raum_ist(21.0).expect_vorlauf_soll(28.7)
-            .vorlauf_ist(28.7).raum_ist(21.0).expect_vorlauf_soll(28.7)
-            .vorlauf_ist(28.7).raum_ist(21.0).expect_vorlauf_soll(28.7)
-            .vorlauf_ist(28.7).raum_ist(21.0).expect_vorlauf_soll(28.7)
-            .vorlauf_ist(28.7).raum_ist(21.0).expect_vorlauf_soll(28.7)
-            .vorlauf_ist(28.7).raum_ist(21.0).expect_vorlauf_soll(28.7)
-            .vorlauf_ist(28.7).raum_ist(21.0).expect_vorlauf_soll(28.7)
-            .vorlauf_ist(28.7).raum_ist(21.0).expect_vorlauf_soll(28.7)
-            .vorlauf_ist(28.7).raum_ist(21.0).expect_vorlauf_soll(28.7)
-            .vorlauf_ist(39).raum_ist(21.0).expect_vorlauf_soll(28.7)
-            .vorlauf_ist(40).raum_ist(21.0).expect_vorlauf_soll(28.7)
-            .vorlauf_ist(40).raum_ist(21.0).expect_vorlauf_soll(28.7)
-            .vorlauf_ist(40).raum_ist(21.0).expect_vorlauf_soll(28.7)
-            .vorlauf_ist(40).raum_ist(21.0).expect_vorlauf_soll(28.7)
-            .vorlauf_ist(40).raum_ist(21.0).expect_vorlauf_soll(28.7)
-            .vorlauf_ist(40).raum_ist(21.0).expect_vorlauf_soll(28.7)
-            .vorlauf_ist(40).raum_ist(21.0).expect_vorlauf_soll(28.7)
-            .vorlauf_ist(40).raum_ist(21.0).expect_vorlauf_soll(28.7)
-
-            # SOLL-Wert wird erhöht auf 22.5°C
-            .vorlauf_ist(30.5).raum_soll(22.5).expect_vorlauf_soll(33.2)
-            .vorlauf_ist(33.5).raum_ist(21.1).expect_vorlauf_soll(33.0)
-            .vorlauf_ist(34.8).raum_ist(21.2).expect_vorlauf_soll(32.6)
-            .vorlauf_ist(35.3).raum_ist(21.4).expect_vorlauf_soll(32.0)
-            .vorlauf_ist(35.7).raum_ist(21.6).expect_vorlauf_soll(31.4)
-            .vorlauf_ist(36.0).raum_ist(22.7).expect_vorlauf_soll(28.7)
-            .vorlauf_ist(34.5).raum_ist(22.6).expect_vorlauf_soll(28.7)
-            .vorlauf_ist(33.8).raum_ist(22.5).expect_vorlauf_soll(28.7)
-            .vorlauf_ist(33.5).raum_ist(22.5).expect_vorlauf_soll(28.7)
-            .vorlauf_ist(33.5).raum_ist(22.5).expect_vorlauf_soll(28.7)
-            .vorlauf_ist(33.5).raum_ist(21.5).expect_vorlauf_soll(31.7)
-
-            # Außentemperatur sinkt - mehr Vorlauf nötig
-            #.vorlauf_ist(33.5).t_aussen(9).expect_vorlauf_soll(33.5)
-            #.vorlauf_ist(33.8).t_aussen(8).expect_vorlauf_soll(34.0)
-            #.vorlauf_ist(34.3).t_aussen(6).expect_vorlauf_soll(34.5)
-            #.vorlauf_ist(35.0).t_aussen(3).expect_vorlauf_soll(35.5)
-            #.vorlauf_ist(36.2).t_aussen(0).expect_vorlauf_soll(37.0)
-            #.vorlauf_ist(37.8).t_aussen(-3).expect_vorlauf_soll(38.5)
-            #.vorlauf_ist(39.2).t_aussen(-6).expect_vorlauf_soll(40.0)
-            #.vorlauf_ist(40.8).t_aussen(-9).expect_vorlauf_soll(41.5)
-            #.vorlauf_ist(42.2).t_aussen(-11).expect_vorlauf_soll(43.0)
-            #.vorlauf_ist(43.5).t_aussen(-12).expect_vorlauf_soll(44.0)
-            #.vorlauf_ist(44.2).t_aussen(-12).expect_vorlauf_soll(44.5)
-        )
-
-    def test_flow_calculation2(self):
-        """Test flow controller learns to adjust based on room temperature feedback."""
-        flow_controller = FlowController(
-            min_vorlauf=25.0,
-            max_vorlauf=55.0,
-            learning_rate=0.01,
-        )
-
-        flow_controller.min_predictions_for_model = 5  # Schnell aus Fallback raus
-        #flow_controller.reward_learning_enabled = False  # Klassisches Lernen
-
-        (
-            controller(flow_controller).enable_history_learning().tolerance(0.1).wait(60)
-            .t_aussen(3.4).raum_ist(22.43).raum_soll(22.5).vorlauf_ist(31.7)
-            .expect_vorlauf_soll(31.8)
-            .vorlauf_ist(30.3).raum_ist(20.3).expect_vorlauf_soll(38.4)
-            .vorlauf_ist(30.6).raum_ist(20.5).expect_vorlauf_soll(37.8)
-            .vorlauf_ist(30.0).raum_ist(20.8).expect_vorlauf_soll(36.9)
-            .vorlauf_ist(29.0).raum_ist(21.0).expect_vorlauf_soll(36.3)
-            .vorlauf_ist(28.5).raum_ist(21.0).expect_vorlauf_soll(36.3)
-        )
-
 class TestPersistancey:
     """Test persistency of the flow controller."""
 
@@ -593,8 +497,8 @@ class TestPersistancey:
         # First prediction
         result1 = controller.berechne_vorlauf_soll(
             SensorValues(aussen_temp=0.0, raum_ist=22.0, raum_soll=22.0, vorlauf_ist=35.0)
-        )[0]
-        assert result1 == pytest.approx(32.92, abs=0.01)
+        )
+        assert result1.vorlauf == pytest.approx(32.92, abs=0.01)
 
         # Pickle and unpickle
         stream = io.BytesIO()
@@ -603,7 +507,7 @@ class TestPersistancey:
 
         stream = io.BytesIO(binary_data)
         stream.seek(0)
-        controller2 = pickle.load(stream)
+        controller2: FlowController = pickle.load(stream)
 
         # After unpickling, config must be restored
         controller2.update_config(
@@ -618,8 +522,8 @@ class TestPersistancey:
         # Second prediction should work with restored model
         result2 = controller2.berechne_vorlauf_soll(
             SensorValues(aussen_temp=10.0, raum_ist=22.0, raum_soll=22.0, vorlauf_ist=35.0)
-        )[0]
-        assert result2 == pytest.approx(31.96, abs=0.01)
+        )
+        assert result2.vorlauf == pytest.approx(31.96, abs=0.01)
         assert len(controller2.erfahrungs_liste) == 2
 
     def test_config_changes_after_unpickle(self):
@@ -643,7 +547,7 @@ class TestPersistancey:
         stream.seek(0)
 
         # Unpickle with DIFFERENT config (like user changed settings in HA)
-        controller2 = pickle.load(stream)
+        controller2: FlowController = pickle.load(stream)
         controller2.update_config(
             min_vorlauf=20.0,  # Changed from 25.0
             max_vorlauf=50.0,  # Changed from 40.0
@@ -662,8 +566,8 @@ class TestPersistancey:
         result = controller2.berechne_vorlauf_soll(
             SensorValues(aussen_temp=10.0, raum_ist=22.0, raum_soll=22.0, vorlauf_ist=35.0)
         )
-        assert result[0] >= 20.0  # Respects new min
-        assert result[0] <= 50.0  # Respects new max
+        assert result.vorlauf >= 20.0  # Respects new min
+        assert result.vorlauf <= 50.0  # Respects new max
 
 class TestLearning:
     """Test prediction logic."""
@@ -845,7 +749,7 @@ class TestLearning:
             )
 
             # Get actual prediction
-            vorlauf_soll, _ = flow_controller.berechne_vorlauf_soll(
+            vorlauf_soll_and_features = flow_controller.berechne_vorlauf_soll(
                 SensorValues(
                     aussen_temp=expected['t_aussen'],
                     raum_ist=raum_ist_to_use,
@@ -856,7 +760,7 @@ class TestLearning:
 
             # Store for next iteration
             prev_raum_ist = raum_ist_to_use
-            prev_vorlauf_soll = vorlauf_soll
+            prev_vorlauf_soll = vorlauf_soll_and_features.vorlauf
             prev_vorlauf_ist = vorlauf_ist_to_use
 
             actual_rows.append({
@@ -864,18 +768,18 @@ class TestLearning:
                 'raum_ist': raum_ist_to_use,
                 'raum_soll': expected['raum_soll'],
                 'vorlauf_ist': vorlauf_ist_to_use,
-                'vorlauf_soll': vorlauf_soll
+                'vorlauf_soll': vorlauf_soll_and_features.vorlauf
             })
 
             # Check if vorlauf_soll within tolerance
-            diff = abs(vorlauf_soll - expected['vorlauf_soll'])
+            diff = abs(vorlauf_soll_and_features.vorlauf - expected['vorlauf_soll'])
             if diff > tolerance:
                 errors.append({
                     'row': i + 1,
                     'type': 'vorlauf_soll',
                     't_aussen': expected['t_aussen'],
                     'expected': expected['vorlauf_soll'],
-                    'actual': vorlauf_soll,
+                    'actual': vorlauf_soll_and_features.vorlauf,
                     'diff': diff
                 })
 

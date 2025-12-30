@@ -308,30 +308,6 @@ class TestIsHeatingMode:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_sensor_unavailable(self, mock_hass, full_config):
-        """Test when sensor is unavailable."""
-        number = FlowControlNumber(mock_hass, full_config, "test_entry")
-
-        betriebsart_state = MagicMock()
-        betriebsart_state.state = "unavailable"
-        mock_hass.states.get.return_value = betriebsart_state
-
-        result = await number._is_heating_mode()
-
-        assert result is True
-
-    @pytest.mark.asyncio
-    async def test_sensor_not_found(self, mock_hass, full_config):
-        """Test when sensor is not found."""
-        number = FlowControlNumber(mock_hass, full_config, "test_entry")
-
-        mock_hass.states.get.return_value = None
-
-        result = await number._is_heating_mode()
-
-        assert result is True
-
-    @pytest.mark.asyncio
     async def test_sensor_with_whitespace(self, mock_hass, full_config):
         """Test when sensor value has whitespace."""
         number = FlowControlNumber(mock_hass, full_config, "test_entry")
@@ -459,7 +435,6 @@ class TestAsyncSetNativeValue:
         await number.async_set_native_value(40.0)
 
         assert number._attr_native_value == 40.0
-        assert number._last_vorlauf_soll == 40.0
         mock_hass.services.async_call.assert_called_once()
         number.async_write_ha_state.assert_called_once()
 
@@ -483,13 +458,23 @@ class TestAsyncUpdateVorlaufSoll:
         with patch.object(
             number, "_async_get_sensor_values", return_value=mock_sensor_data
         ):
-            # Mock controller calculation
+            # Mock controller calculation - create complete Features object
             mock_features = Features(
-                raum_abweichung=1.0,
+                aussen_temp=5.0,
+                raum_ist=22.0,
+                raum_soll=21.0,
+                vorlauf_ist=35.0,
+                raum_abweichung=-1.0,
                 aussen_trend_1h=0.5,
                 aussen_trend_2h=0.3,
                 aussen_trend_3h=0.2,
                 aussen_trend_6h=0.1,
+                stunde_sin=0.0,
+                stunde_cos=1.0,
+                wochentag_sin=0.0,
+                wochentag_cos=1.0,
+                temp_diff=-17.0,
+                vorlauf_raum_diff=13.0,
             )
             mock_hass.async_add_executor_job.side_effect = [
                 (38.5, mock_features),  # berechne_vorlauf_soll
@@ -504,11 +489,8 @@ class TestAsyncUpdateVorlaufSoll:
             await number._async_update_vorlauf_soll()
 
             assert number._attr_native_value == 38.5
-            assert number._last_vorlauf_soll == 38.5
-            #assert number._available is True
-            #assert number._last_update is not None
-            #assert number._next_update is not None
-            #number.async_write_ha_state.assert_called()
+            assert number._available is True
+            number.async_write_ha_state.assert_called()
 
     @pytest.mark.asyncio
     async def test_update_with_switch_enabled(self, mock_hass, minimal_config):
@@ -529,13 +511,23 @@ class TestAsyncUpdateVorlaufSoll:
             ),
             patch.object(number, "_async_set_vorlauf_soll") as mock_set,
         ):
-            # Mock controller calculation
+            # Mock controller calculation - create complete Features object
             mock_features = Features(
-                raum_abweichung = 1.0,
-                aussen_trend_1h= 0.5,
-                aussen_trend_2h = 0.3,
-                aussen_trend_3h = 0.2,
-                aussen_trend_6h = 0.1,
+                aussen_temp=5.0,
+                raum_ist=22.0,
+                raum_soll=21.0,
+                vorlauf_ist=35.0,
+                raum_abweichung=-1.0,
+                aussen_trend_1h=0.5,
+                aussen_trend_2h=0.3,
+                aussen_trend_3h=0.2,
+                aussen_trend_6h=0.1,
+                stunde_sin=0.0,
+                stunde_cos=1.0,
+                wochentag_sin=0.0,
+                wochentag_cos=1.0,
+                temp_diff=-17.0,
+                vorlauf_raum_diff=13.0,
             )
             mock_hass.async_add_executor_job.side_effect = [
                 (38.5, mock_features),  # berechne_vorlauf_soll

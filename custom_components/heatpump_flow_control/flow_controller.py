@@ -15,6 +15,7 @@ from .types import (
     ModelStats,
     SensorValues,
     TempVorlauf,
+    VorlaufSollAndFeatures,
     VorlaufSollWeight,
 )
 
@@ -469,17 +470,14 @@ class FlowController:
     def berechne_vorlauf_soll(
         self,
         sensor_values: SensorValues,
-    ) -> tuple[float, Features]:
-        """Berechnet optimalen Vorlauf-Sollwert.
+    ) -> VorlaufSollAndFeatures:
+        """Berechnet Vorlauf-Soll basierend auf Model und Features.
 
         Args:
-            aussen_temp: Außentemperatur
-            raum_ist: Ist-Raumtemperatur
-            raum_soll: Soll-Raumtemperatur
-            vorlauf_ist: Ist-Vorlauf
+            sensor_values: Sensorwerte für die Berechnung
 
         Returns:
-            tuple: (vorlauf_soll, features)
+            VorlaufSollAndFeatures: Vorlauf-Soll und zugehörige Features
         """
 
         _LOGGER.info("berechne_vorlauf_soll()")
@@ -542,7 +540,7 @@ class FlowController:
             self.max_vorlauf,
         )  # noqa: HASS_LOGGER_CAPITAL
 
-        return vorlauf_soll, features
+        return VorlaufSollAndFeatures(vorlauf=vorlauf_soll, features=features)
 
     def get_model_statistics(self) -> ModelStats:
         """Gibt Model-Statistiken zurück."""
