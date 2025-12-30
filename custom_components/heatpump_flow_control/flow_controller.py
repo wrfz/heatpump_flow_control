@@ -105,22 +105,19 @@ class FlowController:
         """
 
         # Heizkurve: 10°C → 26.4°C bis -15°C → 35°C
-        p0 = TempVorlauf(10.0, 26.4)
+        p0 = TempVorlauf(10.0, 26.4) # Aussentemperaur, Vorlauf
         p1 = TempVorlauf(-15.0, 35.0)
 
-        # 1. Die mathematische Gerade (funktioniert immer, solange p0.temp != p1.temp)
         vorlauf = p0.vorlauf + (p1.vorlauf - p0.vorlauf) / (p1.temp - p0.temp) * (aussen_temp - p0.temp)
 
         # Korrektur basierend auf Raum-Abweichung
-        if raum_abweichung > 0.5 or raum_abweichung < -0.5:  # Raum zu kalt
+        if abs(raum_abweichung) > 0.5:  # Raum zu warm/kalt
             vorlauf += raum_abweichung * 2.0
 
         v_min = min(p0.vorlauf, p1.vorlauf)
         v_max = max(p0.vorlauf, p1.vorlauf)
 
-        vorlauf = max(v_min, min(vorlauf, v_max))
-
-        return vorlauf
+        return max(v_min, min(vorlauf, v_max))
 
     def _train_synthetic_data(self) -> None:
         """Trainiere Model mit synthetischen Daten aus der Heizkurve."""
@@ -132,7 +129,7 @@ class FlowController:
         _LOGGER.info("Starte synthetisches Training (Temperaturbereich %.1f bis %.1f°C)", temp_min, temp_max)
 
         # Viele Trainingsdurchläufe für präzises Lernen
-        for _ in range(20):
+        for _ in range(10):
             for t_aussen in range(int(temp_min), int(temp_max) + 1):
                 # Breiter Temperaturbereich 16-28°C mit Schwerpunkt auf 22.5°C
                 for raum_soll in [16.0, 17.0, 18.0, 19.0, 20.0, 21.0, 21.5, 22.0, 22.5, 22.5, 23.0, 24.0, 25.0, 26.0, 27.0, 28.0]:
