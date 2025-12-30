@@ -138,8 +138,7 @@ class FlowController:
 
         _LOGGER.info("__setstate__()")
 
-        # Restore learned state
-        self.pickle_version = state["pickle_version"]
+        self.pickle_version = state.get("pickle_version", PICKLE_VERSION)
         self.model = state["model"]
         self.metric = state["metric"]
         self.erfahrungs_liste = state["erfahrungs_liste"]

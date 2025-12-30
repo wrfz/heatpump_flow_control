@@ -26,9 +26,6 @@ from homeassistant.util import dt as dt_util
 from .const import (
     ATTR_AUSSEN_TEMP,
     ATTR_AUSSEN_TREND_1H,
-    ATTR_AUSSEN_TREND_2H,
-    ATTR_AUSSEN_TREND_3H,
-    ATTR_AUSSEN_TREND_6H,
     ATTR_LAST_UPDATE,
     ATTR_MODEL_MAE,
     ATTR_NEXT_UPDATE,
@@ -48,8 +45,8 @@ from .const import (
     CONF_VORLAUF_SOLL_ENTITY,
     DEFAULT_BETRIEBSART_HEIZEN_WERT,
     DEFAULT_LEARNING_RATE,
-    DEFAULT_MAX_VORLAUF,
-    DEFAULT_MIN_VORLAUF,
+    DEFAULT_MAX_VORLAUF_LO,
+    DEFAULT_MIN_VORLAUF_HI,
     DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
 )
@@ -106,8 +103,8 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
         self._is_heating_entity = config.get(CONF_IS_HEATING_ENTITY)
 
         # Konfiguration
-        self._min_vorlauf = config.get(CONF_MIN_VORLAUF, DEFAULT_MIN_VORLAUF)
-        self._max_vorlauf = config.get(CONF_MAX_VORLAUF, DEFAULT_MAX_VORLAUF)
+        self._min_vorlauf = config.get(CONF_MIN_VORLAUF, DEFAULT_MIN_VORLAUF_HI)
+        self._max_vorlauf = config.get(CONF_MAX_VORLAUF, DEFAULT_MAX_VORLAUF_LO)
         self._update_interval_minutes = config.get(
             CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL
         )

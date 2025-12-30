@@ -9,7 +9,13 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 from homeassistant.helpers.selector import NumberSelectorMode
 
-from .const import DOMAIN
+from .const import (
+    DEFAULT_MAX_VORLAUF_HI,
+    DEFAULT_MAX_VORLAUF_LO,
+    DEFAULT_MIN_VORLAUF_HI,
+    DEFAULT_MIN_VORLAUF_LO,
+    DOMAIN,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -46,13 +52,13 @@ def get_config_schema(defaults=None):
             ),
             vol.Required(
                 "is_heating", default=defaults.get("is_heating")
-            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="boolean_sensor")),
+            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="binary_sensor")),
             vol.Optional(
                 "min_vorlauf", default=defaults.get("min_vorlauf", 25.0)
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(
-                    min=28.0,
-                    max=32.0,
+                    min=DEFAULT_MIN_VORLAUF_LO,
+                    max=DEFAULT_MIN_VORLAUF_HI,
                     step=1.0,
                     mode=NumberSelectorMode.BOX,
                     unit_of_measurement="°C",
@@ -62,8 +68,8 @@ def get_config_schema(defaults=None):
                 "max_vorlauf", default=defaults.get("max_vorlauf", 55.0)
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(
-                    min=35.0,
-                    max=40.0,
+                    min=DEFAULT_MAX_VORLAUF_LO,
+                    max=DEFAULT_MAX_VORLAUF_HI,
                     step=1.0,
                     mode=NumberSelectorMode.BOX,
                     unit_of_measurement="°C",
