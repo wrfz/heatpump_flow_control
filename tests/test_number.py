@@ -97,7 +97,7 @@ class TestFlowControlNumberInit:
 
         assert number._attr_native_min_value == number._controller.min_vorlauf
         assert number._attr_native_max_value == number._controller.max_vorlauf
-        assert number._attr_native_step == 0.5
+        assert number._attr_native_step == 0.1
 
 
 class TestFormatSensorAsFloat:

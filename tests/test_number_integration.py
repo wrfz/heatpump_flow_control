@@ -92,7 +92,7 @@ class TestFlowControlNumberPublicAPI:
         assert number.unique_id == f"{DOMAIN}_{mock_config_entry.entry_id}_vorlauf_soll"
         assert number.native_min_value == number._controller.min_vorlauf
         assert number.native_max_value == number._controller.max_vorlauf
-        assert number.native_step == 0.5
+        assert number.native_step == 0.1
         assert number.native_unit_of_measurement == "°C"
         assert number.icon == "mdi:thermometer-auto"
 

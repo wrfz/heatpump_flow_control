@@ -8,9 +8,12 @@ from unittest.mock import patch
 
 from custom_components.heatpump_flow_control.flow_controller import (
     DateTimeTemperatur,
+    Erfahrung,
+    Features,
     FlowController,
     HistoryBuffer,
     SensorValues,
+    VorlaufSollWeight,
 )
 import numpy as np
 import pytest
@@ -56,6 +59,47 @@ class TestFlowControllerInit:
 
         # Simuliere Pickle-Reload: _setup() wird aufgerufen aber use_fallback existiert schon
         controller._setup()
+
+
+class TestBewertung:
+    """Test reward calculation logic."""
+
+    def test_bewerte_erfahrung(self):
+        """Test reward calculation for experiences."""
+
+        controller = FlowController(
+            min_vorlauf=18.0,
+            max_vorlauf=39.0,
+            learning_rate=0.01,
+        )
+
+        DC = 0.0
+
+        features=Features(
+            aussen_temp=DC,
+            raum_ist=DC,
+            raum_soll=DC,
+            vorlauf_ist=DC,
+            raum_abweichung=DC,
+            aussen_trend_1h=DC,
+            stunde_sin=DC,
+            stunde_cos=DC,
+            wochentag_sin=DC,
+            wochentag_cos=DC,
+            temp_diff=DC,
+            vorlauf_raum_diff=DC,
+        )
+
+        def bewerte_erfahrung(raum_ist_jetzt: float, raum_soll: float, vorlauf_soll: float) -> VorlaufSollWeight:
+            return controller._bewerte_erfahrung(  # noqa: SLF001
+                    erfahrung=Erfahrung(timestamp=datetime.now(), features=features, raum_soll=raum_soll, vorlauf_soll=vorlauf_soll, raum_ist_vorher=DC),
+                    raum_ist_jetzt=raum_ist_jetzt,
+                )
+
+        assert bewerte_erfahrung(raum_ist_jetzt=22.0, raum_soll=22.0, vorlauf_soll=30.0) == pytest.approx(VorlaufSollWeight(vorlauf_soll=30.00, weight=1.00), abs=0.01)
+        assert bewerte_erfahrung(raum_ist_jetzt=21.0, raum_soll=22.0, vorlauf_soll=30.0) == pytest.approx(VorlaufSollWeight(vorlauf_soll=31.75, weight=2.05), abs=0.01)
+        assert bewerte_erfahrung(raum_ist_jetzt=22.0, raum_soll=21.0, vorlauf_soll=30.0) == pytest.approx(VorlaufSollWeight(vorlauf_soll=28.25, weight=2.05), abs=0.01)
+
 
 class TestFeatureCreation:
     """Test feature creation logic."""

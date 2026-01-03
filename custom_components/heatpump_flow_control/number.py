@@ -123,7 +123,7 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
         # Get min/max from controller
         self._attr_native_min_value = config_entry.runtime_data.min_vorlauf
         self._attr_native_max_value = config_entry.runtime_data.max_vorlauf
-        self._attr_native_step = 0.5
+        self._attr_native_step = 0.1
 
         self._tasks: set[asyncio.Task[None]] = set()
 

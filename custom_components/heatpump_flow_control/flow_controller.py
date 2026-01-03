@@ -326,26 +326,32 @@ class FlowController:
         erfahrung: Erfahrung,
         raum_ist_jetzt: float,
     ) -> VorlaufSollWeight:
-        """Berechnet korrigierten Vorlauf."""
+        """Berechnet korrigierten Vorlauf mit stetiger, symmetrischer Gewichtung.
 
-        # Echte Abweichung (kann positiv oder negativ sein)
-        abweichung = erfahrung.raum_soll - raum_ist_jetzt  # Positiv = zu kalt, Negativ = zu warm
+        Die Gewichtung beginnt bei 0.3°C Abweichung zu steigen und ist symmetrisch
+        für zu kalte und zu warme Räume.
+        """
+
+        # Abweichung: Positiv = zu kalt, Negativ = zu warm
+        abweichung = erfahrung.raum_soll - raum_ist_jetzt
         abweichung_abs = abs(abweichung)
 
-        if abweichung_abs < 0.3:
-            # War gut! Temperatur fast perfekt erreicht
-            korrigierter_vorlauf = erfahrung.vorlauf_soll
-            weight = 1.0
+        # Stetige Gewichtung: beginnt bei 0.3°C zu steigen, max bei 2.3°C
+        excess = max(0.0, abweichung_abs - 0.3)  # Wie viel über 0.3°C
 
-        elif abweichung > 0:  # Zu kalt -> Vorlauf war zu niedrig
-            korrigierter_vorlauf = erfahrung.vorlauf_soll + abweichung * 3.0
-            weight = 3.0
+        # Weight: 1.0 (bei <0.3°C) → 4.0 (bei ≥2.3°C)
+        weight = 1.0 + min(excess, 2.0) * 1.5
 
-        else:  # Zu warm -> Vorlauf war zu hoch
-            korrigierter_vorlauf = erfahrung.vorlauf_soll + abweichung * 2.0  # abweichung ist negativ!
-            weight = 2.0
+        # Korrektur-Faktor: 0.0 (bei <0.3°C) → 5.0 (bei ≥2.3°C)
+        korrektur_faktor = min(excess, 2.0) * 2.5
 
-        _LOGGER.info("_bewerte_erfahrung() korrigierter_vorlauf=%s, weight=%s", korrigierter_vorlauf, weight)
+        # Symmetrisch für zu kalt/zu warm (abweichung kann positiv oder negativ sein)
+        korrigierter_vorlauf = erfahrung.vorlauf_soll + abweichung * korrektur_faktor
+
+        _LOGGER.info(
+            "_bewerte_erfahrung() Abw=%.2f°C, Vorlauf %.1f→%.1f°C, weight=%.2f",
+            abweichung, erfahrung.vorlauf_soll, korrigierter_vorlauf, weight
+        )
 
         return VorlaufSollWeight(vorlauf_soll=korrigierter_vorlauf, weight=weight)
 

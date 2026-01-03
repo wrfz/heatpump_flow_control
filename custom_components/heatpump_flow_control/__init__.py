@@ -143,7 +143,7 @@ async def async_save_controller(
 ) -> None:
     """Save controller to disk."""
 
-    model_file_name = f"{DOMAIN}_{entry.entry_id}.model.pkl"
+    model_file_name = f"{DOMAIN}.model.pkl"
     model_path = Path(hass.config.path(model_file_name))
 
     def _save():

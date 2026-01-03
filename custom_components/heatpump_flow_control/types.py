@@ -7,6 +7,8 @@ from datetime import datetime, timedelta
 from itertools import islice
 from typing import Any
 
+import pytest
+
 
 @dataclass
 class TempVorlauf:
@@ -161,6 +163,19 @@ class VorlaufSollWeight:
 
     vorlauf_soll: float
     weight: float
+
+    def __eq__(self, other):
+        """Ermöglicht den Vergleich mit pytest.approx für Tests."""
+
+        if isinstance(other, VorlaufSollWeight):
+            return (self.vorlauf_soll == other.vorlauf_soll and
+                    self.weight == other.weight)
+
+        if hasattr(other, "expected") and isinstance(other.expected, VorlaufSollWeight):
+            return (self.vorlauf_soll == pytest.approx(other.expected.vorlauf_soll, abs=other.abs, rel=other.rel) and
+                    self.weight == pytest.approx(other.expected.weight, abs=other.abs, rel=other.rel))
+
+        return False
 
 @dataclass
 class VorlaufSollAndFeatures:
