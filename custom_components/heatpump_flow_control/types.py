@@ -89,6 +89,7 @@ class SensorValues:
     raum_ist: float
     raum_soll: float
     vorlauf_ist: float
+    thermische_leistung: float | None = None  # Optional: aktuelle thermische Leistung in kW
 
 @dataclass
 class ModelStats:
@@ -129,6 +130,9 @@ class Features:
     # Interaktions-Features
     temp_diff: float
     vorlauf_raum_diff: float
+    # Thermische Leistung Features
+    thermische_leistung: float = 0.0  # Absolute Leistung in kW
+    thermische_leistung_relativ: float = 0.5  # Relative Leistung (0-1)
 
     def to_dict(self) -> dict[str, float]:
         """Gibt die Features als Dictionary zurück."""

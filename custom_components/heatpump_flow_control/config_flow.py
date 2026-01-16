@@ -10,8 +10,10 @@ from homeassistant.helpers import selector
 from homeassistant.helpers.selector import NumberSelectorMode
 
 from .const import (
+    DEFAULT_MAX_THERMISCHE_LEISTUNG,
     DEFAULT_MAX_VORLAUF_HI,
     DEFAULT_MAX_VORLAUF_LO,
+    DEFAULT_MIN_THERMISCHE_LEISTUNG,
     DEFAULT_MIN_VORLAUF_HI,
     DEFAULT_MIN_VORLAUF_LO,
     DOMAIN,
@@ -54,6 +56,9 @@ def get_config_schema(defaults=None):
                 "is_heating", default=defaults.get("is_heating")
             ): selector.EntitySelector(selector.EntitySelectorConfig(domain="binary_sensor")),
             vol.Optional(
+                "thermische_leistung_sensor", default=defaults.get("thermische_leistung_sensor")
+            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
+            vol.Optional(
                 "min_vorlauf", default=defaults.get("min_vorlauf", 25.0)
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(
@@ -73,6 +78,28 @@ def get_config_schema(defaults=None):
                     step=1.0,
                     mode=NumberSelectorMode.BOX,
                     unit_of_measurement="°C",
+                )
+            ),
+            vol.Optional(
+                "min_thermische_leistung", default=defaults.get("min_thermische_leistung", DEFAULT_MIN_THERMISCHE_LEISTUNG)
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0.1,
+                    max=10.0,
+                    step=0.1,
+                    mode=NumberSelectorMode.BOX,
+                    unit_of_measurement="kW",
+                )
+            ),
+            vol.Optional(
+                "max_thermische_leistung", default=defaults.get("max_thermische_leistung", DEFAULT_MAX_THERMISCHE_LEISTUNG)
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0.5,
+                    max=20.0,
+                    step=0.1,
+                    mode=NumberSelectorMode.BOX,
+                    unit_of_measurement="kW",
                 )
             ),
             vol.Optional(

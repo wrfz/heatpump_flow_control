@@ -36,6 +36,7 @@ from .const import (
     CONF_IS_HEATING_ENTITY,
     CONF_RAUM_IST_SENSOR,
     CONF_RAUM_SOLL_SENSOR,
+    CONF_THERMISCHE_LEISTUNG_SENSOR,
     CONF_UPDATE_INTERVAL,
     CONF_VORLAUF_IST_SENSOR,
     CONF_VORLAUF_SOLL_ENTITY,
@@ -95,6 +96,7 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
         self._vorlauf_ist_sensor = config[CONF_VORLAUF_IST_SENSOR]
         self._vorlauf_soll_entity = config[CONF_VORLAUF_SOLL_ENTITY]
         self._is_heating_entity = config.get(CONF_IS_HEATING_ENTITY)
+        self._thermische_leistung_sensor = config.get(CONF_THERMISCHE_LEISTUNG_SENSOR)
 
         # Konfiguration
         self._update_interval_minutes = config.get(
@@ -159,14 +161,18 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
         )
 
         # Setup state change listener
+        sensor_list = [
+            self._aussen_temp_sensor,
+            self._raum_ist_sensor,
+            self._raum_soll_sensor,
+            self._vorlauf_ist_sensor,
+        ]
+        if self._thermische_leistung_sensor:
+            sensor_list.append(self._thermische_leistung_sensor)
+
         self._state_change_listener = async_track_state_change_event(
             self.hass,
-            [
-                self._aussen_temp_sensor,
-                self._raum_ist_sensor,
-                self._raum_soll_sensor,
-                self._vorlauf_ist_sensor,
-            ],
+            sensor_list,
             self._async_sensor_state_changed,
         )
 
@@ -332,12 +338,28 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
                 raum_soll_value = float(raum_soll.state)
                 raum_soll = float(raum_soll_value)
 
+            # Thermische Leistung (optional)
+            thermische_leistung = None
+            if self._thermische_leistung_sensor:
+                thermische_leistung_state = self.hass.states.get(self._thermische_leistung_sensor)
+                if thermische_leistung_state and thermische_leistung_state.state not in ("unavailable", "unknown"):
+                    try:
+                        thermische_leistung = float(thermische_leistung_state.state)
+                    except (ValueError, TypeError):
+                        _LOGGER.warning("Could not parse thermische_leistung sensor value")
+
         except (ValueError, TypeError) as e:
             _LOGGER.error("Error reading sensor values: %s", e)
             return None
 
         else:
-            return SensorValues(aussen_temp=aussen_temp, raum_ist=raum_ist, raum_soll=raum_soll, vorlauf_ist=vorlauf_ist)
+            return SensorValues(
+                aussen_temp=aussen_temp,
+                raum_ist=raum_ist,
+                raum_soll=raum_soll,
+                vorlauf_ist=vorlauf_ist,
+                thermische_leistung=thermische_leistung,
+            )
 
     async def _async_update_vorlauf_soll(self, now=None) -> None:
         """Update the Vorlauf-Soll value."""

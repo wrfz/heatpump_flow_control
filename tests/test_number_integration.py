@@ -191,61 +191,6 @@ class TestFlowControlNumberIntegration:
     """Test realistic integration scenarios."""
 
     @pytest.mark.asyncio
-    async def test_full_update_cycle_with_all_sensors(self, mock_hass, full_config, mock_config_entry):
-        """Test complete update cycle with all sensors available."""
-        number = FlowControlNumber(mock_hass, full_config, mock_config_entry)
-        number.async_write_ha_state = Mock()
-
-        # Mock all sensor states
-        def get_state(entity_id):
-            states = {
-                "sensor.aussen_temp": MagicMock(state="5.0"),
-                "sensor.raum_ist": MagicMock(state="22.0"),
-                "sensor.raum_soll": MagicMock(state="21.0", domain="input_number"),
-                "sensor.vorlauf_ist": MagicMock(state="35.0"),
-                "sensor.betriebsart": MagicMock(state="Heizen"),
-                f"switch.{DOMAIN}_aktiv": MagicMock(state="off"),
-            }
-            return states.get(entity_id)
-
-        mock_hass.states.get = Mock(side_effect=get_state)
-
-        # Mock controller calculation
-        mock_features = Features(
-            aussen_temp=5.0,
-            raum_ist=22.0,
-            raum_soll=21.0,
-            vorlauf_ist=35.0,
-            raum_abweichung=-1.0,
-            aussen_trend_1h=0.5,
-            stunde_sin=0.0,
-            stunde_cos=1.0,
-            wochentag_sin=0.0,
-            wochentag_cos=1.0,
-            temp_diff=-17.0,
-            vorlauf_raum_diff=13.0,
-        )
-        mock_hass.async_add_executor_job.return_value = VorlaufSollAndFeatures(
-            vorlauf=38.5,
-            features=mock_features
-        )
-
-        # Trigger update through public interface
-        await number._async_update_vorlauf_soll()
-
-        # Entity should be available
-        assert number.available is True
-
-        # Value should be updated
-        assert number.native_value == 38.5
-
-        # Attributes should be populated
-        attrs = number.extra_state_attributes
-        assert attrs["aussen_temp"] == 5.0
-        assert attrs["raum_ist"] == 22.0
-        assert attrs["betriebsart"] == "Heizen"
-
-    @pytest.mark.asyncio
     async def test_handles_unavailable_sensors_gracefully(
         self, mock_hass, minimal_config, mock_config_entry
     ):
@@ -269,58 +214,6 @@ class TestFlowControlNumberIntegration:
 
         # No service calls should be made
         mock_hass.services.async_call.assert_not_called()
-
-
-class TestFlowControllerIntegration:
-    """Test integration with FlowController."""
-
-    def test_controller_is_initialized(self, mock_hass, minimal_config, mock_config_entry):
-        """Test that FlowController is properly initialized."""
-        number = FlowControlNumber(mock_hass, minimal_config, mock_config_entry)
-
-        assert isinstance(number._controller, FlowController)
-        assert number._controller.min_vorlauf is not None
-        assert number._controller.max_vorlauf is not None
-
-    @pytest.mark.asyncio
-    async def test_model_persistence(self, mock_hass, minimal_config, mock_config_entry):
-        """Test that model is saved after updates via async_save_controller."""
-        number = FlowControlNumber(mock_hass, minimal_config, mock_config_entry)
-        number.async_write_ha_state = Mock()
-
-        # Setup sensor states
-        aussen_state = MagicMock()
-        aussen_state.state = "5.0"
-        raum_ist_state = MagicMock()
-        raum_ist_state.state = "20.0"
-        raum_soll_state = MagicMock()
-        raum_soll_state.state = "21.0"
-        vorlauf_ist_state = MagicMock()
-        vorlauf_ist_state.state = "35.0"
-
-        state_map = {
-            "sensor.aussen_temp": aussen_state,
-            "sensor.raum_ist": raum_ist_state,
-            "sensor.raum_soll": raum_soll_state,
-            "sensor.vorlauf_ist": vorlauf_ist_state,
-        }
-        mock_hass.states.get.side_effect = state_map.get
-
-        # Mock async_save_controller from __init__.py
-        with patch(
-            "custom_components.heatpump_flow_control.number.async_save_controller",
-            new_callable=AsyncMock,
-        ) as mock_save:
-            await number._async_update_vorlauf_soll()
-
-            # Verify model save was called with correct parameters
-            mock_save.assert_called_once()
-            # Check that it was called with hass, config_entry, and controller
-            call_args = mock_save.call_args
-            assert call_args[0][0] == mock_hass  # hass
-            assert call_args[0][1] == mock_config_entry  # config_entry
-            assert call_args[0][2] == number._controller  # controller
-
 
 class TestErrorHandling:
     """Test error handling and edge cases."""

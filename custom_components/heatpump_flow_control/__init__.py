@@ -9,10 +9,14 @@ from homeassistant.core import HomeAssistant
 
 from .const import (
     CONF_LEARNING_RATE,
+    CONF_MAX_THERMISCHE_LEISTUNG,
     CONF_MAX_VORLAUF,
+    CONF_MIN_THERMISCHE_LEISTUNG,
     CONF_MIN_VORLAUF,
     DEFAULT_LEARNING_RATE,
+    DEFAULT_MAX_THERMISCHE_LEISTUNG,
     DEFAULT_MAX_VORLAUF_LO,
+    DEFAULT_MIN_THERMISCHE_LEISTUNG,
     DEFAULT_MIN_VORLAUF_HI,
 )
 from .flow_controller import PICKLE_VERSION, FlowController
@@ -64,9 +68,11 @@ async def _async_load_or_create_controller(
     min_vorlauf = entry.data.get(CONF_MIN_VORLAUF, DEFAULT_MIN_VORLAUF_HI)
     max_vorlauf = entry.data.get(CONF_MAX_VORLAUF, DEFAULT_MAX_VORLAUF_LO)
     learning_rate = entry.data.get(CONF_LEARNING_RATE, DEFAULT_LEARNING_RATE)
+    min_thermische_leistung = entry.data.get(CONF_MIN_THERMISCHE_LEISTUNG, DEFAULT_MIN_THERMISCHE_LEISTUNG)
+    max_thermische_leistung = entry.data.get(CONF_MAX_THERMISCHE_LEISTUNG, DEFAULT_MAX_THERMISCHE_LEISTUNG)
 
     # Model file path
-    model_file_name = f"{DOMAIN}_{entry.entry_id}.model.pkl"
+    model_file_name = f"{DOMAIN}.model.pkl"
     model_path = Path(hass.config.path(model_file_name))
 
     def _load() -> FlowController | None:
@@ -102,9 +108,8 @@ async def _async_load_or_create_controller(
                 loaded.min_predictions_for_model = 0
 
                 _LOGGER.info(
-                    "Model loaded successfully (version %d, predictions: %d)",
+                    "Model loaded successfully (version %d)",
                     loaded_version,
-                    loaded.predictions_count,
                 )
                 return loaded
         except (pickle.UnpicklingError, EOFError, AttributeError) as err:
@@ -124,16 +129,22 @@ async def _async_load_or_create_controller(
             min_vorlauf=min_vorlauf,
             max_vorlauf=max_vorlauf,
             learning_rate=learning_rate,
+            min_thermische_leistung=min_thermische_leistung,
+            max_thermische_leistung=max_thermische_leistung,
         )
-        return loaded_controller
+    else:
+        # Create new controller
+        _LOGGER.info("Creating new FlowController")
+        loaded_controller = FlowController(
+            min_vorlauf=min_vorlauf,
+            max_vorlauf=max_vorlauf,
+            learning_rate=learning_rate,
+            min_thermische_leistung=min_thermische_leistung,
+            max_thermische_leistung=max_thermische_leistung,
+        )
+        loaded_controller.setup(iterations=10)
 
-    # Create new controller
-    _LOGGER.info("Creating new FlowController")
-    return FlowController(
-        min_vorlauf=min_vorlauf,
-        max_vorlauf=max_vorlauf,
-        learning_rate=learning_rate,
-    )
+    return loaded_controller
 
 
 async def async_save_controller(

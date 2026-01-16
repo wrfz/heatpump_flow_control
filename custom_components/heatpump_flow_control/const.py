@@ -9,8 +9,11 @@ CONF_RAUM_SOLL_SENSOR = "raum_soll_sensor"
 CONF_VORLAUF_IST_SENSOR = "vorlauf_ist_sensor"
 CONF_VORLAUF_SOLL_ENTITY = "vorlauf_soll_entity"
 CONF_IS_HEATING_ENTITY = "is_heating_entity"
+CONF_THERMISCHE_LEISTUNG_SENSOR = "thermische_leistung_sensor"
 CONF_MIN_VORLAUF = "min_vorlauf"
 CONF_MAX_VORLAUF = "max_vorlauf"
+CONF_MIN_THERMISCHE_LEISTUNG = "min_thermische_leistung"
+CONF_MAX_THERMISCHE_LEISTUNG = "max_thermische_leistung"
 CONF_UPDATE_INTERVAL = "update_interval"
 CONF_LEARNING_RATE = "learning_rate"
 
@@ -21,6 +24,8 @@ DEFAULT_MAX_VORLAUF_LO = 35.0
 DEFAULT_MAX_VORLAUF_HI = 55.0
 DEFAULT_UPDATE_INTERVAL = 60  # Minuten
 DEFAULT_LEARNING_RATE = 0.01
+DEFAULT_MIN_THERMISCHE_LEISTUNG = 0.6  # kW
+DEFAULT_MAX_THERMISCHE_LEISTUNG = 6.0  # kW
 DEFAULT_BETRIEBSART_HEIZEN_WERT = "Heizen"
 
 # Attribute
