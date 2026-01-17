@@ -204,15 +204,14 @@ class FlowController:
         Typische Heizkurve: Vorlauf = A - B * Außentemperatur.
         """
 
-        # Heizkurve: 10°C → 26.4°C bis -15°C → 35°C
-        p0 = TempVorlauf(10.0, 26.4) # Aussentemperaur, Vorlauf
-        p1 = TempVorlauf(-15.0, 35.0)
+        # Heizkurve: 15°C → min-vorlauf bis -20°C → max-vorlauf
+        p0 = TempVorlauf(15, self.min_vorlauf) # Aussentemperaur, Vorlauf
+        p1 = TempVorlauf(-20.0, self.max_vorlauf)
 
         vorlauf = p0.vorlauf + (p1.vorlauf - p0.vorlauf) / (p1.temp - p0.temp) * (aussen_temp - p0.temp)
 
         # Korrektur basierend auf Raum-Abweichung
-        if abs(raum_abweichung) > 0.5:  # Raum zu warm/kalt
-            vorlauf += raum_abweichung * 2.0
+        vorlauf += raum_abweichung * 10.0
 
         v_min = min(p0.vorlauf, p1.vorlauf)
         v_max = max(p0.vorlauf, p1.vorlauf)

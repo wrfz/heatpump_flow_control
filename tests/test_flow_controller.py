@@ -18,6 +18,8 @@ from custom_components.heatpump_flow_control.flow_controller import (
 import numpy as np
 import pytest
 
+from .temperature_test_base import TemperaturePredictionTestBase
+
 
 class TestFlowControllerInit:
     """Test FlowController initialization."""
@@ -177,10 +179,10 @@ class TestPrediction:
         )
 
         # Test direct fallback curve (not the trained model)
-        assert controller._heizkurve_fallback(-20.0, 0.0) == pytest.approx(35.00, abs=0.01)     # noqa: SLF001
-        assert controller._heizkurve_fallback(-10.0, 0.0) == pytest.approx(33.28, abs=0.01)     # noqa: SLF001
-        assert controller._heizkurve_fallback(  0.0, 0.0) == pytest.approx(29.84, abs=0.01)     # noqa: SLF001
-        assert controller._heizkurve_fallback( 10.0, 0.0) == pytest.approx(26.40, abs=0.01)     # noqa: SLF001
+        assert controller._heizkurve_fallback(-20.0, 0.0) == pytest.approx(40.00, abs=0.01)     # noqa: SLF001
+        assert controller._heizkurve_fallback(-10.0, 0.0) == pytest.approx(35.71, abs=0.01)     # noqa: SLF001
+        assert controller._heizkurve_fallback(  0.0, 0.0) == pytest.approx(31.42, abs=0.01)     # noqa: SLF001
+        assert controller._heizkurve_fallback( 10.0, 0.0) == pytest.approx(27.14, abs=0.01)     # noqa: SLF001
         assert controller._heizkurve_fallback( 15.0, 0.0) == pytest.approx(26.40, abs=0.01)     # noqa: SLF001
         assert controller._heizkurve_fallback( 20.0, 0.0) == pytest.approx(26.40, abs=0.01)     # noqa: SLF001
 
@@ -457,7 +459,7 @@ class TestPersistancey:
         result1 = controller.berechne_vorlauf_soll(
             SensorValues(aussen_temp=0.0, raum_ist=22.0, raum_soll=22.0, vorlauf_ist=35.0)
         )
-        assert result1.vorlauf == pytest.approx(32.08, abs=0.01)
+        assert result1.vorlauf == pytest.approx(34.74, abs=0.01)
 
         # Pickle and unpickle
         stream = io.BytesIO()
@@ -482,7 +484,7 @@ class TestPersistancey:
         result2 = controller2.berechne_vorlauf_soll(
             SensorValues(aussen_temp=10.0, raum_ist=22.0, raum_soll=22.0, vorlauf_ist=35.0)
         )
-        assert result2.vorlauf == pytest.approx(31.39, abs=0.01)
+        assert result2.vorlauf == pytest.approx(34.35, abs=0.01)
         assert len(controller2.erfahrungs_liste) == 2
 
     def test_config_changes_after_unpickle(self):
@@ -529,405 +531,10 @@ class TestPersistancey:
         assert result.vorlauf >= 20.0  # Respects new min
         assert result.vorlauf <= 50.0  # Respects new max
 
-class TestLearning:
-    """Test prediction logic."""
 
-    # Physics simulation parameters (adjustable)
-    HEATING_FACTOR = 0.15  # How much vorlauf heats the room per hour
-    COOLING_FACTOR = 0.05  # Heat loss to outside per hour
-    VORLAUF_ADJUSTMENT_FACTOR = 0.3  # How fast vorlauf_ist approaches vorlauf_soll per hour
+class TestLearning(TemperaturePredictionTestBase):
+    """Test learning and prediction behavior."""
 
-    def _simulate_raum_ist_change(
-        self,
-        raum_ist_old: float,
-        vorlauf_soll: float,
-        aussen_temp: float,
-        hours: float = 1.0
-    ) -> float:
-        """Simulate how raum_ist changes based on vorlauf_soll and outside temperature.
-
-        Args:
-            raum_ist_old: Previous room temperature
-            vorlauf_soll: Flow temperature setpoint
-            aussen_temp: Outside temperature
-            hours: Time period in hours (default: 1.0)
-
-        Returns:
-            New room temperature after heating/cooling
-        """
-        # Heating effect: positive if vorlauf is warmer than room
-        heating_delta = (vorlauf_soll - raum_ist_old) * self.HEATING_FACTOR * hours
-
-        # Cooling effect: heat loss to outside (always negative)
-        cooling_delta = -(raum_ist_old - aussen_temp) * self.COOLING_FACTOR * hours
-
-        # New room temperature
-        return raum_ist_old + heating_delta + cooling_delta
-
-    def _simulate_vorlauf_ist_change(
-        self,
-        vorlauf_ist_old: float,
-        vorlauf_soll: float,
-        hours: float = 1.0
-    ) -> float:
-        """Simulate how vorlauf_ist changes towards vorlauf_soll.
-
-        Args:
-            vorlauf_ist_old: Previous flow temperature
-            vorlauf_soll: Flow temperature setpoint
-            hours: Time period in hours (default: 1.0)
-
-        Returns:
-            New flow temperature moving towards setpoint
-        """
-        # Flow temperature adjusts towards setpoint
-        delta = (vorlauf_soll - vorlauf_ist_old) * self.VORLAUF_ADJUSTMENT_FACTOR * hours
-        return vorlauf_ist_old + delta
-
-    def _assert_temperature_predictions(
-        self,
-        flow_controller: FlowController,
-        temperature_table: str,
-        tolerance: float = 0.1,
-        simulate_raum_ist: bool = False
-    ) -> None:
-        """Helper to test temperature predictions against expected table.
-
-        Args:
-            flow_controller: The controller to test
-            temperature_table: Table with expected values in format:
-                t_aussen | raum-ist | raum-soll | vorlauf_ist | vorlauf_soll
-                -------------------------------------------------------------
-                10.0     | 22,5     | 22,5      | 28,0        | 26,40
-                ...
-            tolerance: Allowed deviation in °C
-            simulate_raum_ist: If True, simulate raum_ist based on physics and compare
-        """
-        # Parse temperature table and track separator positions
-        expected_rows = []
-        separator_before_row = set()  # Track which rows should have separator before them
-
-        for _, line in enumerate(temperature_table.strip().split('\n')):
-            line = line.strip()
-            if not line or 't_aussen' in line:
-                continue
-
-            # Check if this is a separator line (must check before '|' check)
-            if '---' in line:
-                # Mark that next data row should have separator before it
-                separator_before_row.add(len(expected_rows))
-                continue
-
-            # Skip lines without data separator
-            if '|' not in line:
-                continue
-
-            parts = [p.strip().replace(',', '.') for p in line.split('|')]
-            if len(parts) == 5:
-                expected_rows.append({
-                    't_aussen': float(parts[0]),
-                    'raum_ist': float(parts[1]),
-                    'raum_soll': float(parts[2]),
-                    'vorlauf_ist': float(parts[3]),
-                    'vorlauf_soll': float(parts[4])
-                })
-
-        # Execute predictions and collect actual results
-        test_helper = (
-            controller(flow_controller)
-            .enable_history_learning()
-            .wait(60)
-        )
-
-        actual_rows = []
-        errors = []
-
-        # Track previous values for simulation
-        prev_raum_ist = None
-        prev_vorlauf_soll = None
-        prev_vorlauf_ist = None
-
-        for i, expected in enumerate(expected_rows):
-            # If simulating physics, calculate expected raum_ist from previous values
-            if simulate_raum_ist and i > 0 and prev_raum_ist is not None and prev_vorlauf_soll is not None:
-                simulated_raum_ist = self._simulate_raum_ist_change(
-                    raum_ist_old=prev_raum_ist,
-                    vorlauf_soll=prev_vorlauf_soll,
-                    aussen_temp=expected['t_aussen'],
-                    hours=1.0  # Assuming 1 hour between measurements
-                )
-
-                # Check if table value matches simulation
-                raum_ist_diff = abs(expected['raum_ist'] - simulated_raum_ist)
-                if raum_ist_diff > 0.1:  # Tolerance for raum_ist simulation
-                    errors.append({
-                        'row': i + 1,
-                        'type': 'raum_ist_simulation',
-                        't_aussen': expected['t_aussen'],
-                        'expected': expected['raum_ist'],
-                        'actual': simulated_raum_ist,
-                        'diff': raum_ist_diff,
-                        'prev_raum_ist': prev_raum_ist,
-                        'prev_vorlauf_soll': prev_vorlauf_soll,
-                    })
-
-            # If simulating physics, calculate expected vorlauf_ist from previous values
-            if simulate_raum_ist and i > 0 and prev_vorlauf_ist is not None and prev_vorlauf_soll is not None:
-                simulated_vorlauf_ist = self._simulate_vorlauf_ist_change(
-                    vorlauf_ist_old=prev_vorlauf_ist,
-                    vorlauf_soll=prev_vorlauf_soll,
-                    hours=1.0  # Assuming 1 hour between measurements
-                )
-
-                # Check if table value matches simulation
-                vorlauf_ist_diff = abs(expected['vorlauf_ist'] - simulated_vorlauf_ist)
-                if vorlauf_ist_diff > 0.1:  # Tolerance for vorlauf_ist simulation
-                    errors.append({
-                        'row': i + 1,
-                        'type': 'vorlauf_ist_simulation',
-                        't_aussen': expected['t_aussen'],
-                        'expected': expected['vorlauf_ist'],
-                        'actual': simulated_vorlauf_ist,
-                        'diff': vorlauf_ist_diff,
-                        'prev_vorlauf_ist': prev_vorlauf_ist,
-                        'prev_vorlauf_soll': prev_vorlauf_soll,
-                    })
-
-            # Use table value for raum_ist (either verified by simulation or first row)
-            raum_ist_to_use = expected['raum_ist']
-
-            # Use table value for vorlauf_ist (either verified by simulation or first row)
-            vorlauf_ist_to_use = expected['vorlauf_ist']
-
-            # Execute prediction
-            test_helper = (
-                test_helper
-                .t_aussen(expected['t_aussen'])
-                .raum_ist(raum_ist_to_use)
-                .raum_soll(expected['raum_soll'])
-                .vorlauf_ist(vorlauf_ist_to_use)
-            )
-
-            # Get actual prediction
-            vorlauf_soll_and_features = flow_controller.berechne_vorlauf_soll(
-                SensorValues(
-                    aussen_temp=expected['t_aussen'],
-                    raum_ist=raum_ist_to_use,
-                    raum_soll=expected['raum_soll'],
-                    vorlauf_ist=vorlauf_ist_to_use,
-                )
-            )
-
-            # Store for next iteration
-            prev_raum_ist = raum_ist_to_use
-            prev_vorlauf_soll = vorlauf_soll_and_features.vorlauf
-            prev_vorlauf_ist = vorlauf_ist_to_use
-
-            actual_rows.append({
-                't_aussen': expected['t_aussen'],
-                'raum_ist': raum_ist_to_use,
-                'raum_soll': expected['raum_soll'],
-                'vorlauf_ist': vorlauf_ist_to_use,
-                'vorlauf_soll': vorlauf_soll_and_features.vorlauf
-            })
-
-            # Check if vorlauf_soll within tolerance
-            diff = abs(vorlauf_soll_and_features.vorlauf - expected['vorlauf_soll'])
-            if diff > tolerance:
-                errors.append({
-                    'row': i + 1,
-                    'type': 'vorlauf_soll',
-                    't_aussen': expected['t_aussen'],
-                    'expected': expected['vorlauf_soll'],
-                    'actual': vorlauf_soll_and_features.vorlauf,
-                    'diff': diff
-                })
-
-        # If there are errors, generate helpful output table
-        if errors:
-            # Separate errors by type
-            raum_ist_errors = [e for e in errors if e.get('type') == 'raum_ist_simulation']
-            vorlauf_ist_errors = [e for e in errors if e.get('type') == 'vorlauf_ist_simulation']
-            vorlauf_errors = [e for e in errors if e.get('type') == 'vorlauf_soll']
-
-            # Generate table with actual values (easy to copy-paste)
-            output_lines = [
-                "\n" + "="*80,
-                "TEST FAILED - Predictions don't match expected values",
-                "="*80,
-            ]
-
-            # If there are raum_ist or vorlauf_ist simulation errors, generate corrected table
-            if raum_ist_errors or vorlauf_ist_errors:
-                # Build table lines for both output and direct print
-                table_lines = [
-                    "",
-                    "CORRECTED TABLE WITH SIMULATED RAUM_IST (copy this to update test):",
-                    "-"*80,
-                    "        t_aussen | raum-ist | raum-soll | vorlauf_ist | vorlauf_soll",
-                    "        -------------------------------------------------------------"
-                ]
-
-                error_types = []
-                if raum_ist_errors:
-                    error_types.append("raum_ist")
-                if vorlauf_ist_errors:
-                    error_types.append("vorlauf_ist")
-
-                output_lines.extend([
-                    f"\n{' AND '.join(error_types).upper()} SIMULATION ERRORS:",
-                    "-"*80,
-                    "The values in the table don't match the physics simulation!",
-                    f"Using physics: HEATING_FACTOR={self.HEATING_FACTOR}, COOLING_FACTOR={self.COOLING_FACTOR}, VORLAUF_ADJUSTMENT_FACTOR={self.VORLAUF_ADJUSTMENT_FACTOR}",
-                    "-"*80,
-                    "\nCORRECTED TABLE WITH SIMULATED RAUM_IST (copy this to update test):",
-                    "-"*80,
-                    "        t_aussen | raum-ist | raum-soll | vorlauf_ist | vorlauf_soll",
-                    "        -------------------------------------------------------------"
-                ])
-
-                # Generate complete table with simulated raum_ist and vorlauf_ist values
-                prev_raum_ist_sim = None
-                prev_vorlauf_soll_sim = None
-                prev_vorlauf_ist_sim = None
-
-                for i, row in enumerate(actual_rows):
-                    # Add separator line if needed (from original table structure)
-                    # Skip separator at position 0 (header separator)
-                    if i in separator_before_row and i > 0:
-                        separator = "        -------------------------------------------------------------"
-                        output_lines.append(separator)
-                        table_lines.append(separator)
-
-                    # For first row, use table values
-                    if i == 0:
-                        raum_ist_display = row['raum_ist']
-                        vorlauf_ist_display = row['vorlauf_ist']
-                    else:
-                        # Calculate simulated raum_ist (prev values are guaranteed to be set after first row)
-                        assert prev_raum_ist_sim is not None
-                        assert prev_vorlauf_soll_sim is not None
-                        assert prev_vorlauf_ist_sim is not None
-
-                        raum_ist_display = self._simulate_raum_ist_change(
-                            raum_ist_old=prev_raum_ist_sim,
-                            vorlauf_soll=prev_vorlauf_soll_sim,
-                            aussen_temp=row['t_aussen'],
-                            hours=1.0
-                        )
-                        # Calculate simulated vorlauf_ist
-                        vorlauf_ist_display = self._simulate_vorlauf_ist_change(
-                            vorlauf_ist_old=prev_vorlauf_ist_sim,
-                            vorlauf_soll=prev_vorlauf_soll_sim,
-                            hours=1.0
-                        )
-
-                    # Store for next iteration
-                    prev_raum_ist_sim = raum_ist_display
-                    prev_vorlauf_soll_sim = row['vorlauf_soll']
-                    prev_vorlauf_ist_sim = vorlauf_ist_display
-
-                    # Format line
-                    line = (
-                        f"        {row['t_aussen']:>5.1f}     | "
-                        f"{raum_ist_display:>4.1f}     | "
-                        f"{row['raum_soll']:>5.1f}     | "
-                        f"{vorlauf_ist_display:>7.1f}     | "
-                        f"{row['vorlauf_soll']:.2f}"
-                    )
-
-                    output_lines.append(line)
-                    table_lines.append(line)
-
-                output_lines.extend([
-                    "-"*70,
-                    "\nDETAILS (first 10 errors):",
-                    "-"*70,
-                ])
-
-                if raum_ist_errors:
-                    output_lines.append("\nRAUM_IST errors:")
-                    for err in raum_ist_errors[:10]:
-                        output_lines.append(
-                            f"Row {err['row']:2d}: Table={err['expected']:.2f}°C → Simulated={err['actual']:.2f}°C "
-                            f"(Diff: {err['diff']:.2f}°C)"
-                        )
-                    if len(raum_ist_errors) > 10:
-                        output_lines.append(f"... and {len(raum_ist_errors) - 10} more errors")
-
-                if vorlauf_ist_errors:
-                    output_lines.append("\nVORLAUF_IST errors:")
-                    for err in vorlauf_ist_errors[:10]:
-                        output_lines.append(
-                            f"Row {err['row']:2d}: Table={err['expected']:.2f}°C → Simulated={err['actual']:.2f}°C "
-                            f"(Diff: {err['diff']:.2f}°C)"
-                        )
-                    if len(vorlauf_ist_errors) > 10:
-                        output_lines.append(f"... and {len(vorlauf_ist_errors) - 10} more errors")
-
-                # Print table without pytest's "E" prefix for easy copying
-                print("\n" + "\n".join(table_lines) + "\n")
-
-            # Show vorlauf_soll prediction errors if any
-            elif vorlauf_errors:
-                # Build table lines for both output and direct print
-                table_lines = [
-                    "",
-                    "ACTUAL OUTPUT TABLE (copy this to update test):",
-                    "-"*80,
-                    "        t_aussen | raum-ist | raum-soll | vorlauf_ist | vorlauf_soll",
-                    "        -------------------------------------------------------------"
-                ]
-
-                output_lines.extend([
-                    "\nVORLAUF_SOLL PREDICTION ERRORS:",
-                    "-"*80,
-                    "\nACTUAL OUTPUT TABLE (copy this to update test):",
-                    "-"*80,
-                    "        t_aussen | raum-ist | raum-soll | vorlauf_ist | vorlauf_soll",
-                    "        -------------------------------------------------------------"
-                ])
-
-                for i, row in enumerate(actual_rows):
-                    # Add separator line if needed (from original table structure)
-                    # Skip separator at position 0 (header separator)
-                    if i in separator_before_row and i > 0:
-                        separator = "        -------------------------------------------------------------"
-                        output_lines.append(separator)
-                        table_lines.append(separator)
-
-                    line = (
-                        f"        {row['t_aussen']:>5.1f}     | "
-                        f"{row['raum_ist']:>4.1f}     | "
-                        f"{row['raum_soll']:>5.1f}     | "
-                        f"{row['vorlauf_ist']:>7.1f}     | "
-                        f"{row['vorlauf_soll']:.2f}"
-                    )
-
-                    output_lines.append(line)
-                    table_lines.append(line)
-
-                output_lines.extend([
-                    "-"*70,
-                    "\nERROR DETAILS:",
-                    "-"*70,
-                ])
-
-                output_lines.extend(
-                    f"Row {err['row']:2d}: t_aussen={err['t_aussen']:>6.1f}°C  "
-                    f"Expected: {err['expected']:.2f}°C  "
-                    f"Actual: {err['actual']:.2f}°C  "
-                    f"Diff: {err['diff']:.2f}°C (tolerance: {tolerance}°C)"
-                    for err in vorlauf_errors
-                )
-
-                # Print table without pytest's "E" prefix for easy copying
-                print("\n" + "\n".join(table_lines) + "\n")  # noqa: T201
-
-            output_lines.append("="*70 + "\n")
-
-            error_msg = "\n".join(output_lines)
-            pytest.fail(error_msg)
 
     def test_outside_temperature_learning(self):
         """Test that the model learns to adjust flow temperature based on outside temperature changes."""
@@ -946,34 +553,34 @@ class TestLearning:
         temperatures = """
         t_aussen | raum-ist | raum-soll | vorlauf_ist | vorlauf_soll
         -------------------------------------------------------------
-         10.0     | 22.5     |  22.5     |    28.0     | 28.22
-          8.0     | 22.6     |  22.5     |    28.1     | 28.37
-          6.0     | 22.7     |  22.5     |    28.2     | 28.48
-          4.0     | 22.6     |  22.5     |    28.3     | 28.74
-          2.0     | 22.5     |  22.5     |    28.4     | 28.96
-          0.0     | 22.3     |  22.5     |    28.6     | 29.22
-         -2.0     | 22.2     |  22.5     |    28.8     | 29.52
-         -4.0     | 22.0     |  22.5     |    29.0     | 29.82
-         -6.0     | 21.7     |  22.5     |    29.2     | 30.17
-         -8.0     | 21.5     |  22.5     |    29.5     | 30.51
-        -10.0     | 21.3     |  22.5     |    29.8     | 30.89
-        -12.0     | 21.1     |  22.5     |    30.1     | 31.23
-        -14.0     | 20.8     |  22.5     |    30.5     | 31.62
-        -15.0     | 20.7     |  22.5     |    30.8     | 31.90
+         10.0     | 22.5     |  22.5     |    28.0     | 28.62
+          8.0     | 22.7     |  22.5     |    28.2     | 28.75
+          6.0     | 22.8     |  22.5     |    28.4     | 28.93
+          4.0     | 22.8     |  22.5     |    28.5     | 29.09
+          2.0     | 22.7     |  22.5     |    28.7     | 29.39
+          0.0     | 22.5     |  22.5     |    28.9     | 29.75
+         -2.0     | 22.4     |  22.5     |    29.2     | 30.14
+         -4.0     | 22.2     |  22.5     |    29.4     | 30.50
+         -6.0     | 22.1     |  22.5     |    29.8     | 30.97
+         -8.0     | 21.9     |  22.5     |    30.1     | 31.41
+        -10.0     | 21.7     |  22.5     |    30.5     | 31.94
+        -12.0     | 21.6     |  22.5     |    30.9     | 32.40
+        -14.0     | 21.4     |  22.5     |    31.3     | 32.93
+        -15.0     | 21.3     |  22.5     |    31.8     | 33.44
         -------------------------------------------------------------
-        -14.0     | 20.6     |  22.5     |    31.1     | 31.96
-        -12.0     | 20.7     |  22.5     |    31.4     | 31.92
-        -10.0     | 20.8     |  22.5     |    31.5     | 31.84
-         -8.0     | 21.0     |  22.5     |    31.6     | 31.68
-         -6.0     | 21.3     |  22.5     |    31.6     | 31.43
-         -4.0     | 21.5     |  22.5     |    31.6     | 31.18
-         -2.0     | 21.8     |  22.5     |    31.5     | 30.89
-          0.0     | 22.1     |  22.5     |    31.3     | 30.56
-          2.0     | 22.4     |  22.5     |    31.1     | 30.26
-          4.0     | 22.6     |  22.5     |    30.8     | 29.88
-          6.0     | 22.9     |  22.5     |    30.5     | 29.55
-          8.0     | 23.1     |  22.5     |    30.2     | 29.20
-         10.0     | 23.4     |  22.5     |    29.9     | 28.78
+        -14.0     | 21.4     |  22.5     |    32.3     | 33.75
+        -12.0     | 21.5     |  22.5     |    32.7     | 33.93
+        -10.0     | 21.8     |  22.5     |    33.1     | 34.00
+         -8.0     | 22.1     |  22.5     |    33.3     | 33.90
+         -6.0     | 22.5     |  22.5     |    33.5     | 33.75
+         -4.0     | 22.8     |  22.5     |    33.5     | 33.49
+         -2.0     | 23.2     |  22.5     |    33.5     | 33.17
+          0.0     | 23.5     |  22.5     |    33.4     | 32.82
+          2.0     | 23.8     |  22.5     |    33.2     | 32.40
+          4.0     | 24.1     |  22.5     |    33.0     | 31.98
+          6.0     | 24.4     |  22.5     |    32.6     | 31.39
+          8.0     | 24.6     |  22.5     |    32.3     | 30.94
+         10.0     | 24.8     |  22.5     |    31.9     | 30.42
         """
 
         self._assert_temperature_predictions(controller, temperatures, simulate_raum_ist=True)
@@ -995,46 +602,46 @@ class TestLearning:
         temperatures = """
         t_aussen | raum-ist | raum-soll | vorlauf_ist | vorlauf_soll
         -------------------------------------------------------------
-          0.0     | 20.0     |  22.5     |    32.0     | 31.59
-          0.0     | 20.7     |  22.5     |    31.9     | 31.30
-          0.0     | 21.3     |  22.5     |    31.7     | 31.01
-          0.0     | 21.7     |  22.5     |    31.5     | 30.78
-          0.0     | 22.0     |  22.5     |    31.3     | 30.58
-          0.0     | 22.2     |  22.5     |    31.1     | 30.42
-          0.0     | 22.3     |  22.5     |    30.9     | 30.30
-          0.0     | 22.4     |  22.5     |    30.8     | 30.22
-          0.0     | 22.5     |  22.5     |    30.6     | 30.09
-          0.0     | 22.5     |  22.5     |    30.5     | 30.05
-          0.0     | 22.5     |  22.5     |    30.4     | 30.00
-          0.0     | 22.5     |  22.5     |    30.3     | 29.96
-          0.0     | 22.5     |  22.5     |    30.2     | 29.91
-          0.0     | 22.5     |  22.5     |    30.1     | 29.87
+          0.0     | 20.0     |  22.5     |    32.0     | 33.80
+          0.0     | 21.1     |  22.5     |    32.5     | 33.54
+          0.0     | 21.9     |  22.5     |    32.8     | 33.30
+          0.0     | 22.5     |  22.5     |    33.0     | 33.10
+          0.0     | 23.0     |  22.5     |    33.0     | 32.80
+          0.0     | 23.3     |  22.5     |    33.0     | 32.62
+          0.0     | 23.5     |  22.5     |    32.8     | 32.33
+          0.0     | 23.7     |  22.5     |    32.7     | 32.13
+          0.0     | 23.7     |  22.5     |    32.5     | 31.97
+          0.0     | 23.8     |  22.5     |    32.3     | 31.74
+          0.0     | 23.8     |  22.5     |    32.2     | 31.66
+          0.0     | 23.8     |  22.5     |    32.0     | 31.50
+          0.0     | 23.7     |  22.5     |    31.8     | 31.40
+          0.0     | 23.7     |  22.5     |    31.7     | 31.31
         -------------------------------------------------------------
-          0.0     | 22.5     |  20.0     |    30.1     | 29.02
-          0.0     | 22.4     |  20.0     |    29.8     | 28.92
-          0.0     | 22.3     |  20.0     |    29.6     | 28.87
-          0.0     | 22.1     |  20.0     |    29.4     | 28.85
-          0.0     | 22.1     |  20.0     |    29.2     | 28.76
-          0.0     | 22.0     |  20.0     |    29.1     | 28.74
-          0.0     | 21.9     |  20.0     |    29.0     | 28.73
-          0.0     | 21.8     |  20.0     |    29.0     | 28.77
-          0.0     | 21.8     |  20.0     |    28.9     | 28.72
-          0.0     | 21.8     |  20.0     |    28.9     | 28.72
-          0.0     | 21.7     |  20.0     |    28.9     | 28.76
-          0.0     | 21.7     |  20.0     |    28.9     | 28.76
-          0.0     | 21.7     |  20.0     |    28.8     | 28.71
-          0.0     | 21.7     |  20.0     |    28.8     | 28.71
+          0.0     | 23.7     |  20.0     |    31.6     | 29.73
+          0.0     | 23.4     |  20.0     |    31.0     | 29.42
+          0.0     | 23.1     |  20.0     |    30.6     | 29.28
+          0.0     | 22.9     |  20.0     |    30.2     | 29.07
+          0.0     | 22.7     |  20.0     |    29.9     | 28.95
+          0.0     | 22.5     |  20.0     |    29.6     | 28.83
+          0.0     | 22.3     |  20.0     |    29.4     | 28.78
+          0.0     | 22.2     |  20.0     |    29.2     | 28.68
+          0.0     | 22.1     |  20.0     |    29.1     | 28.66
+          0.0     | 22.0     |  20.0     |    29.0     | 28.64
+          0.0     | 21.9     |  20.0     |    28.9     | 28.62
+          0.0     | 21.8     |  20.0     |    28.9     | 28.68
+          0.0     | 21.8     |  20.0     |    28.9     | 28.68
+          0.0     | 21.7     |  20.0     |    28.8     | 28.66
         -------------------------------------------------------------
-          0.0     | 21.7     |  25.0     |    28.8     | 30.40
-          0.0     | 21.9     |  25.0     |    29.3     | 30.56
-          0.0     | 22.1     |  25.0     |    29.7     | 30.67
-          0.0     | 22.3     |  25.0     |    30.0     | 30.73
-          0.0     | 22.5     |  25.0     |    30.3     | 30.80
-          0.0     | 22.6     |  25.0     |    30.5     | 30.86
-          0.0     | 22.7     |  25.0     |    30.6     | 30.87
-          0.0     | 22.8     |  25.0     |    30.7     | 30.88
-          0.0     | 22.9     |  25.0     |    30.8     | 30.89
-          0.0     | 23.0     |  25.0     |    30.8     | 30.85
+          0.0     | 21.7     |  25.0     |    28.8     | 31.65
+          0.0     | 22.1     |  25.0     |    29.7     | 32.15
+          0.0     | 22.6     |  25.0     |    30.5     | 32.50
+          0.0     | 22.9     |  25.0     |    31.1     | 32.81
+          0.0     | 23.3     |  25.0     |    31.7     | 33.06
+          0.0     | 23.6     |  25.0     |    32.1     | 33.20
+          0.0     | 23.9     |  25.0     |    32.4     | 33.26
+          0.0     | 24.1     |  25.0     |    32.7     | 33.39
+          0.0     | 24.3     |  25.0     |    32.9     | 33.43
+          0.0     | 24.4     |  25.0     |    33.1     | 33.53
         """
 
         self._assert_temperature_predictions(controller, temperatures, simulate_raum_ist=True)
