@@ -488,11 +488,6 @@ class FlowController:
         """
 
         _LOGGER.info("berechne_vorlauf_soll()")
-        #if not self._enabled:
-        #    _LOGGER.info("Controller ist deaktiviert, verwende Fallback-Heizkurve")
-        #    features = self._erstelle_features(sensor_values)
-        #    return VorlaufSollAndFeatures(vorlauf=vorlauf_soll, features=features)
-
         features = self._erstelle_features(sensor_values)
 
         # Model für Prediction verwenden

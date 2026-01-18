@@ -250,7 +250,6 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
 
         sensor_values = await self._async_get_sensor_values()
         if sensor_values is not None:
-            _LOGGER.info("All sensors now available, triggering update")
             await self._async_update_vorlauf_soll()
 
     async def _is_heating_mode(self) -> bool:
@@ -375,6 +374,10 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
                         time_since_resume
                     )
                     return
+
+            if self._controller.enabled is False:
+                _LOGGER.info("Controller disabled - skipping update")
+                return
 
             # Check if heating mode is disabled (if tracking enabled)
             if self._is_heating_entity:
