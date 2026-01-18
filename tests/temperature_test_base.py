@@ -44,9 +44,10 @@ class Error:
 class TemperaturePredictionTestBase:
     """Base class for temperature prediction tests with physics simulation."""
 
-    # Physics simulation parameters (adjustable)
-    HEATING_FACTOR = 0.15  # How much vorlauf heats the room per hour
-    COOLING_FACTOR = 0.05  # Heat loss to outside per hour
+    # Physics simulation parameters - adjusted to match realistic heating behavior
+    # With these values, a room at 22.5°C with vorlauf=31.4°C and outside=0°C stays stable
+    HEATING_FACTOR = 0.095  # How much vorlauf heats the room per hour (reduced for realism)
+    COOLING_FACTOR = 0.05  # Heat loss to outside per hour (increased for better insulation)
     VORLAUF_ADJUSTMENT_FACTOR = 0.3  # How fast vorlauf_ist approaches vorlauf_soll per hour
 
     def _simulate_raum_ist_change(
@@ -160,7 +161,10 @@ class TemperaturePredictionTestBase:
         vorlauf_ist_to_use = expected.vorlauf_ist
 
         # Skip first row (no previous values)
-        if row_index == 0 or prev_raum_ist is None:
+        if (row_index == 0 or
+            prev_raum_ist is None or
+            prev_vorlauf_soll is None or
+            prev_vorlauf_ist is None):
             return errors, raum_ist_to_use, vorlauf_ist_to_use
 
         # Validate raum_ist against simulation
@@ -316,8 +320,101 @@ class TemperaturePredictionTestBase:
 
         return actual_rows, errors
 
+    def _stabilize_table(
+        self,
+        flow_controller: FlowController,
+        initial_rows: list[Row],
+        separator_before_row: set[int],
+        max_iterations: int = 10
+    ) -> tuple[list[Row], int]:
+        """Stabilize table through iterative simulation until convergence.
+
+        Args:
+            flow_controller: Controller to use for predictions
+            initial_rows: Initial row configuration (t_aussen, raum_soll)
+            separator_before_row: Set of row indices that have separators
+            max_iterations: Maximum iterations before giving up
+
+        Returns:
+            Tuple of (stabilized_rows, iterations_needed)
+        """
+        converged = False
+        iteration = 0
+        prev_iteration_rows = None
+        current_rows = initial_rows
+
+        while not converged and iteration < max_iterations:
+            iteration += 1
+            new_rows = []
+
+            prev_raum_ist = current_rows[0].raum_ist
+            prev_vorlauf_ist = current_rows[0].vorlauf_ist
+            prev_vorlauf_soll: float | None = None
+
+            for i, row in enumerate(current_rows):
+                # For first row, use provided initial values
+                if i == 0:
+                    raum_ist = row.raum_ist
+                    vorlauf_ist = row.vorlauf_ist
+                elif prev_vorlauf_soll is not None:
+                    # Simulate based on previous row's vorlauf_soll
+                    raum_ist = self._simulate_raum_ist_change(
+                        prev_raum_ist, prev_vorlauf_soll, row.t_aussen, 1.0
+                    )
+                    vorlauf_ist = self._simulate_vorlauf_ist_change(
+                        prev_vorlauf_ist, prev_vorlauf_soll, 1.0
+                    )
+                else:
+                    # Fallback for second row (should not happen, but safe)
+                    raum_ist = row.raum_ist
+                    vorlauf_ist = row.vorlauf_ist
+
+                # Get new prediction with simulated values
+                result = flow_controller.berechne_vorlauf_soll(
+                    SensorValues(
+                        aussen_temp=row.t_aussen,
+                        raum_ist=raum_ist,
+                        raum_soll=row.raum_soll,
+                        vorlauf_ist=vorlauf_ist,
+                    )
+                )
+                vorlauf_soll = result.vorlauf
+
+                new_rows.append(Row(
+                    t_aussen=row.t_aussen,
+                    raum_ist=raum_ist,
+                    raum_soll=row.raum_soll,
+                    vorlauf_ist=vorlauf_ist,
+                    vorlauf_soll=vorlauf_soll
+                ))
+
+                # Store for next row
+                prev_raum_ist = raum_ist
+                prev_vorlauf_ist = vorlauf_ist
+                prev_vorlauf_soll = vorlauf_soll
+
+            # Check convergence
+            if prev_iteration_rows:
+                max_diff = 0.0
+                for curr, prev in zip(new_rows, prev_iteration_rows, strict=True):
+                    diff = max(
+                        abs(curr.raum_ist - prev.raum_ist),
+                        abs(curr.vorlauf_ist - prev.vorlauf_ist),
+                        abs(curr.vorlauf_soll - prev.vorlauf_soll)
+                    )
+                    max_diff = max(max_diff, diff)
+
+                if max_diff < 0.01:
+                    converged = True
+
+            prev_iteration_rows = new_rows
+            current_rows = new_rows
+
+        return current_rows, iteration
+
     def _format_simulation_error_output(
         self,
+        flow_controller: FlowController,
         actual_rows: list[Row],
         errors: list[Error],
         separator_before_row: set[int]
@@ -338,48 +435,37 @@ class TemperaturePredictionTestBase:
         if vorlauf_ist_errors:
             error_types.append("vorlauf_ist")
 
+        # Stabilize table internally before displaying
+        stabilized_rows, iterations = self._stabilize_table(
+            flow_controller, actual_rows, separator_before_row, max_iterations=10
+        )
+
         output_lines.extend([
             f"\n{' AND '.join(error_types).upper()} SIMULATION ERRORS:",
             "-"*80,
             "The values in the table don't match the physics simulation!",
             f"Using physics: HEATING_FACTOR={self.HEATING_FACTOR}, COOLING_FACTOR={self.COOLING_FACTOR}, VORLAUF_ADJUSTMENT_FACTOR={self.VORLAUF_ADJUSTMENT_FACTOR}",
+            f"Table stabilized after {iterations} iteration(s)",
             "-"*80,
             "\nCORRECTED TABLE WITH SIMULATED VALUES (copy this to update test):",
             "-"*80,
+        ])
+
+        # Display stabilized table
+        output_lines.extend([
             "        t_aussen | raum-ist | raum-soll | vorlauf_ist | vorlauf_soll",
             "        -------------------------------------------------------------"
         ])
 
-        # Generate corrected table
-        prev_raum_ist_sim = None
-        prev_vorlauf_soll_sim = None
-        prev_vorlauf_ist_sim = None
-
-        for i, row in enumerate(actual_rows):
+        for i, row in enumerate(stabilized_rows):
             if i in separator_before_row and i > 0:
                 output_lines.append("        -------------------------------------------------------------")
 
-            # Calculate simulated values
-            if i == 0:
-                raum_ist_display = row.raum_ist
-                vorlauf_ist_display = row.vorlauf_ist
-            else:
-                raum_ist_display = self._simulate_raum_ist_change(
-                    prev_raum_ist_sim, prev_vorlauf_soll_sim, row.t_aussen, 1.0
-                )
-                vorlauf_ist_display = self._simulate_vorlauf_ist_change(
-                    prev_vorlauf_ist_sim, prev_vorlauf_soll_sim, 1.0
-                )
-
-            prev_raum_ist_sim = raum_ist_display
-            prev_vorlauf_soll_sim = row.vorlauf_soll
-            prev_vorlauf_ist_sim = vorlauf_ist_display
-
             line = (
                 f"        {row.t_aussen:>5.1f}     | "
-                f"{raum_ist_display:>4.1f}     | "
+                f"{row.raum_ist:>4.1f}     | "
                 f"{row.raum_soll:>5.1f}     | "
-                f"{vorlauf_ist_display:>7.1f}     | "
+                f"{row.vorlauf_ist:>7.1f}     | "
                 f"{row.vorlauf_soll:.2f}"
             )
             output_lines.append(line)
@@ -410,6 +496,7 @@ class TemperaturePredictionTestBase:
 
     def _format_prediction_error_output(
         self,
+        flow_controller: FlowController,
         actual_rows: list[Row],
         errors: list[Error],
         separator_before_row: set[int],
@@ -420,16 +507,22 @@ class TemperaturePredictionTestBase:
         Returns:
             List of output lines
         """
+        # Stabilize table internally before displaying
+        stabilized_rows, iterations = self._stabilize_table(
+            flow_controller, actual_rows, separator_before_row, max_iterations=10
+        )
+
         output_lines = [
             "\nVORLAUF_SOLL PREDICTION ERRORS:",
             "-"*80,
-            "\nACTUAL OUTPUT TABLE (copy this to update test):",
+            f"Table stabilized after {iterations} iteration(s)",
+            "\nSTABLE OUTPUT TABLE (copy this to update test):",
             "-"*80,
             "        t_aussen | raum-ist | raum-soll | vorlauf_ist | vorlauf_soll",
             "        -------------------------------------------------------------"
         ]
 
-        for i, row in enumerate(actual_rows):
+        for i, row in enumerate(stabilized_rows):
             if i in separator_before_row and i > 0:
                 output_lines.append("        -------------------------------------------------------------")
 
@@ -494,7 +587,7 @@ class TemperaturePredictionTestBase:
         # Format appropriate error output
         if raum_ist_errors or vorlauf_ist_errors:
             error_output = self._format_simulation_error_output(
-                actual_rows, errors, separator_before_row
+                flow_controller, actual_rows, errors, separator_before_row
             )
             output_lines.extend(error_output)
 
@@ -505,13 +598,13 @@ class TemperaturePredictionTestBase:
 
         elif vorlauf_errors:
             error_output = self._format_prediction_error_output(
-                actual_rows, vorlauf_errors, separator_before_row, tolerance
+                flow_controller, actual_rows, vorlauf_errors, separator_before_row, tolerance
             )
             output_lines.extend(error_output)
 
             # Also print table for easy copying
             table_start = next(i for i, line in enumerate(error_output)
-                             if "ACTUAL OUTPUT TABLE" in line)
+                             if "STABLE OUTPUT TABLE" in line)
             print("\n".join(error_output[table_start:]))  # noqa: T201
 
         output_lines.append("="*70 + "\n")

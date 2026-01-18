@@ -118,21 +118,14 @@ class Features:
     """Model features."""
 
     aussen_temp: float
-    raum_ist: float
-    raum_soll: float
-    vorlauf_ist: float
     raum_abweichung: float
+    temp_diff: float                    # t_aussen - raum_ist
+    thermische_leistung_relativ: float  # Relative Leistung (0-1)
     aussen_trend_1h: float
     stunde_sin: float
     stunde_cos: float
     wochentag_sin: float
     wochentag_cos: float
-    # Interaktions-Features
-    temp_diff: float
-    vorlauf_raum_diff: float
-    # Thermische Leistung Features
-    thermische_leistung: float = 0.0  # Absolute Leistung in kW
-    thermische_leistung_relativ: float = 0.5  # Relative Leistung (0-1)
 
     def to_dict(self) -> dict[str, float]:
         """Gibt die Features als Dictionary zurück."""

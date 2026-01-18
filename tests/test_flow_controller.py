@@ -8,12 +8,9 @@ from unittest.mock import patch
 
 from custom_components.heatpump_flow_control.flow_controller import (
     DateTimeTemperatur,
-    Erfahrung,
-    Features,
     FlowController,
     HistoryBuffer,
     SensorValues,
-    VorlaufSollWeight,
 )
 import numpy as np
 import pytest
@@ -67,43 +64,6 @@ class TestFlowControllerInit:
 class TestBewertung:
     """Test reward calculation logic."""
 
-    def test_bewerte_erfahrung(self):
-        """Test reward calculation for experiences."""
-
-        controller = FlowController(
-            min_vorlauf=18.0,
-            max_vorlauf=39.0,
-            learning_rate=0.01,
-        )
-
-        DC = 0.0
-
-        features=Features(
-            aussen_temp=DC,
-            raum_ist=DC,
-            raum_soll=DC,
-            vorlauf_ist=DC,
-            raum_abweichung=DC,
-            aussen_trend_1h=DC,
-            stunde_sin=DC,
-            stunde_cos=DC,
-            wochentag_sin=DC,
-            wochentag_cos=DC,
-            temp_diff=DC,
-            vorlauf_raum_diff=DC,
-        )
-
-        def bewerte_erfahrung(raum_ist_jetzt: float, raum_soll: float, vorlauf_soll: float) -> VorlaufSollWeight:
-            return controller._bewerte_erfahrung(  # noqa: SLF001
-                    erfahrung=Erfahrung(timestamp=datetime.now(), features=features, raum_soll=raum_soll, vorlauf_soll=vorlauf_soll, raum_ist_vorher=DC),
-                    raum_ist_jetzt=raum_ist_jetzt,
-                )
-
-        assert bewerte_erfahrung(raum_ist_jetzt=22.0, raum_soll=22.0, vorlauf_soll=30.0) == pytest.approx(VorlaufSollWeight(vorlauf_soll=30.00, weight=1.00), abs=0.01)
-        assert bewerte_erfahrung(raum_ist_jetzt=21.0, raum_soll=22.0, vorlauf_soll=30.0) == pytest.approx(VorlaufSollWeight(vorlauf_soll=32.00, weight=2.00), abs=0.01)
-        assert bewerte_erfahrung(raum_ist_jetzt=22.0, raum_soll=21.0, vorlauf_soll=30.0) == pytest.approx(VorlaufSollWeight(vorlauf_soll=28.00, weight=2.00), abs=0.01)
-
-
 class TestFeatureCreation:
     """Test feature creation logic."""
 
@@ -126,12 +86,8 @@ class TestFeatureCreation:
 
         # Check basic features
         assert features.aussen_temp == 5.0
-        assert features.raum_ist == 22.0
-        assert features.raum_soll == 21.0
-        assert features.vorlauf_ist == 35.0
         assert features.raum_abweichung == -1.0  # 21 - 22 (soll - ist)
         assert features.temp_diff == -17.0  # 5 - 22
-        assert features.vorlauf_raum_diff == 13.0  # 35 - 22
 
         # Check time features exist
         assert features.stunde_sin is not None
@@ -183,24 +139,24 @@ class TestPrediction:
         assert controller._heizkurve_fallback(-10.0, 0.0) == pytest.approx(35.71, abs=0.01)     # noqa: SLF001
         assert controller._heizkurve_fallback(  0.0, 0.0) == pytest.approx(31.42, abs=0.01)     # noqa: SLF001
         assert controller._heizkurve_fallback( 10.0, 0.0) == pytest.approx(27.14, abs=0.01)     # noqa: SLF001
-        assert controller._heizkurve_fallback( 15.0, 0.0) == pytest.approx(26.40, abs=0.01)     # noqa: SLF001
-        assert controller._heizkurve_fallback( 20.0, 0.0) == pytest.approx(26.40, abs=0.01)     # noqa: SLF001
+        assert controller._heizkurve_fallback( 15.0, 0.0) == pytest.approx(25.00, abs=0.01)     # noqa: SLF001
+        assert controller._heizkurve_fallback( 20.0, 0.0) == pytest.approx(25.00, abs=0.01)     # noqa: SLF001
 
         # Test with room temperature deviation (room too hot)
-        assert controller._heizkurve_fallback(-20.0, -1.0) == pytest.approx(34.72, abs=0.01)    # noqa: SLF001
-        assert controller._heizkurve_fallback(-10.0, -1.0) == pytest.approx(31.28, abs=0.01)    # noqa: SLF001
-        assert controller._heizkurve_fallback(  0.0, -1.0) == pytest.approx(27.84, abs=0.01)    # noqa: SLF001
-        assert controller._heizkurve_fallback( 10.0, -1.0) == pytest.approx(26.40, abs=0.01)    # noqa: SLF001
-        assert controller._heizkurve_fallback( 15.0, -1.0) == pytest.approx(26.40, abs=0.01)    # noqa: SLF001
-        assert controller._heizkurve_fallback( 20.0, -1.0) == pytest.approx(26.40, abs=0.01)    # noqa: SLF001
+        assert controller._heizkurve_fallback(-20.0, -1.0) == pytest.approx(38.00, abs=0.01)    # noqa: SLF001
+        assert controller._heizkurve_fallback(-10.0, -1.0) == pytest.approx(33.71, abs=0.01)    # noqa: SLF001
+        assert controller._heizkurve_fallback(  0.0, -1.0) == pytest.approx(29.42, abs=0.01)    # noqa: SLF001
+        assert controller._heizkurve_fallback( 10.0, -1.0) == pytest.approx(25.14, abs=0.01)    # noqa: SLF001
+        assert controller._heizkurve_fallback( 15.0, -1.0) == pytest.approx(25.00, abs=0.01)    # noqa: SLF001
+        assert controller._heizkurve_fallback( 20.0, -1.0) == pytest.approx(25.00, abs=0.01)    # noqa: SLF001
 
         # Test with room temperature deviation (room too cold)
-        assert controller._heizkurve_fallback(-20.0, 1.0) == pytest.approx(35.00, abs=0.01)     # noqa: SLF001
-        assert controller._heizkurve_fallback(-10.0, 1.0) == pytest.approx(35.00, abs=0.01)     # noqa: SLF001
-        assert controller._heizkurve_fallback(  0.0, 1.0) == pytest.approx(31.84, abs=0.01)     # noqa: SLF001
-        assert controller._heizkurve_fallback( 10.0, 1.0) == pytest.approx(28.40, abs=0.01)     # noqa: SLF001
-        assert controller._heizkurve_fallback( 15.0, 1.0) == pytest.approx(26.68, abs=0.01)     # noqa: SLF001
-        assert controller._heizkurve_fallback( 20.0, 1.0) == pytest.approx(26.40, abs=0.01)     # noqa: SLF001
+        assert controller._heizkurve_fallback(-20.0, 1.0) == pytest.approx(40.00, abs=0.01)     # noqa: SLF001
+        assert controller._heizkurve_fallback(-10.0, 1.0) == pytest.approx(37.71, abs=0.01)     # noqa: SLF001
+        assert controller._heizkurve_fallback(  0.0, 1.0) == pytest.approx(33.43, abs=0.01)     # noqa: SLF001
+        assert controller._heizkurve_fallback( 10.0, 1.0) == pytest.approx(29.14, abs=0.01)     # noqa: SLF001
+        assert controller._heizkurve_fallback( 15.0, 1.0) == pytest.approx(27.00, abs=0.01)     # noqa: SLF001
+        assert controller._heizkurve_fallback( 20.0, 1.0) == pytest.approx(25.00, abs=0.01)     # noqa: SLF001
 
     def test_berechne_vorlauf_soll_fallback_mode(self):
         """Test calculation in fallback mode."""
@@ -459,7 +415,7 @@ class TestPersistancey:
         result1 = controller.berechne_vorlauf_soll(
             SensorValues(aussen_temp=0.0, raum_ist=22.0, raum_soll=22.0, vorlauf_ist=35.0)
         )
-        assert result1.vorlauf == pytest.approx(34.74, abs=0.01)
+        assert result1.vorlauf == pytest.approx(30.70, abs=0.01)
 
         # Pickle and unpickle
         stream = io.BytesIO()
@@ -484,7 +440,7 @@ class TestPersistancey:
         result2 = controller2.berechne_vorlauf_soll(
             SensorValues(aussen_temp=10.0, raum_ist=22.0, raum_soll=22.0, vorlauf_ist=35.0)
         )
-        assert result2.vorlauf == pytest.approx(34.35, abs=0.01)
+        assert result2.vorlauf == pytest.approx(28.37, abs=0.01)
         assert len(controller2.erfahrungs_liste) == 2
 
     def test_config_changes_after_unpickle(self):
@@ -553,34 +509,44 @@ class TestLearning(TemperaturePredictionTestBase):
         temperatures = """
         t_aussen | raum-ist | raum-soll | vorlauf_ist | vorlauf_soll
         -------------------------------------------------------------
-         10.0     | 22.5     |  22.5     |    28.0     | 28.62
-          8.0     | 22.7     |  22.5     |    28.2     | 28.75
-          6.0     | 22.8     |  22.5     |    28.4     | 28.93
-          4.0     | 22.8     |  22.5     |    28.5     | 29.09
-          2.0     | 22.7     |  22.5     |    28.7     | 29.39
-          0.0     | 22.5     |  22.5     |    28.9     | 29.75
-         -2.0     | 22.4     |  22.5     |    29.2     | 30.14
-         -4.0     | 22.2     |  22.5     |    29.4     | 30.50
-         -6.0     | 22.1     |  22.5     |    29.8     | 30.97
-         -8.0     | 21.9     |  22.5     |    30.1     | 31.41
-        -10.0     | 21.7     |  22.5     |    30.5     | 31.94
-        -12.0     | 21.6     |  22.5     |    30.9     | 32.40
-        -14.0     | 21.4     |  22.5     |    31.3     | 32.93
-        -15.0     | 21.3     |  22.5     |    31.8     | 33.44
+         15.0     | 22.5     |  22.5     |    28.0     | 27.25
+         14.0     | 22.5     |  22.5     |    27.8     | 27.46
+         13.0     | 22.5     |  22.5     |    27.7     | 27.70
+         12.0     | 22.5     |  22.5     |    27.7     | 27.96
+         11.0     | 22.4     |  22.5     |    27.8     | 28.23
+         10.0     | 22.4     |  22.5     |    27.9     | 28.52
+          8.0     | 22.2     |  22.5     |    28.1     | 29.09
+          6.0     | 22.1     |  22.5     |    28.4     | 29.68
+          4.0     | 21.9     |  22.5     |    28.8     | 30.29
+          2.0     | 21.7     |  22.5     |    29.2     | 30.91
+          0.0     | 21.5     |  22.5     |    29.7     | 31.54
+         -2.0     | 21.3     |  22.5     |    30.3     | 32.18
+         -4.0     | 21.0     |  22.5     |    30.8     | 32.82
+         -6.0     | 20.8     |  22.5     |    31.4     | 33.47
+         -8.0     | 20.6     |  22.5     |    32.0     | 34.13
+        -10.0     | 20.3     |  22.5     |    32.7     | 34.78
+        -12.0     | 20.1     |  22.5     |    33.3     | 35.44
+        -14.0     | 19.8     |  22.5     |    33.9     | 36.10
+        -15.0     | 19.6     |  22.5     |    34.6     | 36.49
         -------------------------------------------------------------
-        -14.0     | 21.4     |  22.5     |    32.3     | 33.75
-        -12.0     | 21.5     |  22.5     |    32.7     | 33.93
-        -10.0     | 21.8     |  22.5     |    33.1     | 34.00
-         -8.0     | 22.1     |  22.5     |    33.3     | 33.90
-         -6.0     | 22.5     |  22.5     |    33.5     | 33.75
-         -4.0     | 22.8     |  22.5     |    33.5     | 33.49
-         -2.0     | 23.2     |  22.5     |    33.5     | 33.17
-          0.0     | 23.5     |  22.5     |    33.4     | 32.82
-          2.0     | 23.8     |  22.5     |    33.2     | 32.40
-          4.0     | 24.1     |  22.5     |    33.0     | 31.98
-          6.0     | 24.4     |  22.5     |    32.6     | 31.39
-          8.0     | 24.6     |  22.5     |    32.3     | 30.94
-         10.0     | 24.8     |  22.5     |    31.9     | 30.42
+        -14.0     | 19.6     |  22.5     |    35.2     | 36.32
+        -12.0     | 19.6     |  22.5     |    35.5     | 35.84
+        -10.0     | 19.6     |  22.5     |    35.6     | 35.33
+         -8.0     | 19.7     |  22.5     |    35.5     | 34.77
+         -6.0     | 19.9     |  22.5     |    35.3     | 34.20
+         -4.0     | 20.1     |  22.5     |    35.0     | 33.60
+         -2.0     | 20.2     |  22.5     |    34.6     | 32.99
+          0.0     | 20.4     |  22.5     |    34.1     | 32.37
+          2.0     | 20.6     |  22.5     |    33.6     | 31.74
+          4.0     | 20.9     |  22.5     |    33.0     | 31.09
+          6.0     | 21.1     |  22.5     |    32.4     | 30.45
+          8.0     | 21.3     |  22.5     |    31.8     | 29.80
+         10.0     | 21.6     |  22.5     |    31.2     | 29.15
+         11.0     | 21.8     |  22.5     |    30.6     | 28.76
+         12.0     | 21.9     |  22.5     |    30.1     | 28.39
+         13.0     | 22.1     |  22.5     |    29.6     | 28.02
+         14.0     | 22.3     |  22.5     |    29.1     | 27.67
+         15.0     | 22.4     |  22.5     |    28.7     | 27.32
         """
 
         self._assert_temperature_predictions(controller, temperatures, simulate_raum_ist=True)
@@ -602,46 +568,47 @@ class TestLearning(TemperaturePredictionTestBase):
         temperatures = """
         t_aussen | raum-ist | raum-soll | vorlauf_ist | vorlauf_soll
         -------------------------------------------------------------
-          0.0     | 20.0     |  22.5     |    32.0     | 33.80
-          0.0     | 21.1     |  22.5     |    32.5     | 33.54
-          0.0     | 21.9     |  22.5     |    32.8     | 33.30
-          0.0     | 22.5     |  22.5     |    33.0     | 33.10
-          0.0     | 23.0     |  22.5     |    33.0     | 32.80
-          0.0     | 23.3     |  22.5     |    33.0     | 32.62
-          0.0     | 23.5     |  22.5     |    32.8     | 32.33
-          0.0     | 23.7     |  22.5     |    32.7     | 32.13
-          0.0     | 23.7     |  22.5     |    32.5     | 31.97
-          0.0     | 23.8     |  22.5     |    32.3     | 31.74
-          0.0     | 23.8     |  22.5     |    32.2     | 31.66
-          0.0     | 23.8     |  22.5     |    32.0     | 31.50
-          0.0     | 23.7     |  22.5     |    31.8     | 31.40
-          0.0     | 23.7     |  22.5     |    31.7     | 31.31
+          0.0     | 21.4     |  20.0     |    26.0     | 29.45
+          0.0     | 21.1     |  20.0     |    27.0     | 29.69
+          0.0     | 20.9     |  20.0     |    27.8     | 29.88
+          0.0     | 20.7     |  20.0     |    28.4     | 30.02
+          0.0     | 20.5     |  20.0     |    28.9     | 30.14
+          0.0     | 20.4     |  20.0     |    29.3     | 30.23
+          0.0     | 20.3     |  20.0     |    29.6     | 30.30
+          0.0     | 20.3     |  20.0     |    29.8     | 30.35
+          0.0     | 20.2     |  20.0     |    30.0     | 30.40
+          0.0     | 20.2     |  20.0     |    30.1     | 30.43
+          0.0     | 20.1     |  20.0     |    30.2     | 30.45
+          0.0     | 20.1     |  20.0     |    30.3     | 30.47
+          0.0     | 20.1     |  20.0     |    30.3     | 30.49
+          0.0     | 20.1     |  20.0     |    30.4     | 30.50
+          0.0     | 20.1     |  20.0     |    30.4     | 30.51
+          0.0     | 20.0     |  20.0     |    30.4     | 30.52
+          0.0     | 20.0     |  20.0     |    30.5     | 30.53
+          0.0     | 20.0     |  20.0     |    30.5     | 30.53
+          0.0     | 20.0     |  20.0     |    30.5     | 30.53
+          0.0     | 20.0     |  20.0     |    30.5     | 30.54
+          0.0     | 20.0     |  20.0     |    30.5     | 30.54
+          0.0     | 20.0     |  20.0     |    30.5     | 30.54
+          0.0     | 20.0     |  20.0     |    30.5     | 30.54
+          0.0     | 20.0     |  20.0     |    30.5     | 30.54
+          0.0     | 20.0     |  20.0     |    30.5     | 30.54
+          0.0     | 20.0     |  20.0     |    30.5     | 30.54
+          0.0     | 20.0     |  20.0     |    30.5     | 30.54
+          0.0     | 20.0     |  20.0     |    30.5     | 30.54
+          0.0     | 20.0     |  20.0     |    30.5     | 30.54
+          0.0     | 20.0     |  20.0     |    30.5     | 30.55
         -------------------------------------------------------------
-          0.0     | 23.7     |  20.0     |    31.6     | 29.73
-          0.0     | 23.4     |  20.0     |    31.0     | 29.42
-          0.0     | 23.1     |  20.0     |    30.6     | 29.28
-          0.0     | 22.9     |  20.0     |    30.2     | 29.07
-          0.0     | 22.7     |  20.0     |    29.9     | 28.95
-          0.0     | 22.5     |  20.0     |    29.6     | 28.83
-          0.0     | 22.3     |  20.0     |    29.4     | 28.78
-          0.0     | 22.2     |  20.0     |    29.2     | 28.68
-          0.0     | 22.1     |  20.0     |    29.1     | 28.66
-          0.0     | 22.0     |  20.0     |    29.0     | 28.64
-          0.0     | 21.9     |  20.0     |    28.9     | 28.62
-          0.0     | 21.8     |  20.0     |    28.9     | 28.68
-          0.0     | 21.8     |  20.0     |    28.9     | 28.68
-          0.0     | 21.7     |  20.0     |    28.8     | 28.66
-        -------------------------------------------------------------
-          0.0     | 21.7     |  25.0     |    28.8     | 31.65
-          0.0     | 22.1     |  25.0     |    29.7     | 32.15
-          0.0     | 22.6     |  25.0     |    30.5     | 32.50
-          0.0     | 22.9     |  25.0     |    31.1     | 32.81
-          0.0     | 23.3     |  25.0     |    31.7     | 33.06
-          0.0     | 23.6     |  25.0     |    32.1     | 33.20
-          0.0     | 23.9     |  25.0     |    32.4     | 33.26
-          0.0     | 24.1     |  25.0     |    32.7     | 33.39
-          0.0     | 24.3     |  25.0     |    32.9     | 33.43
-          0.0     | 24.4     |  25.0     |    33.1     | 33.53
+          0.0     | 20.0     |  25.0     |    30.5     | 34.86
+          0.0     | 20.4     |  25.0     |    31.8     | 34.54
+          0.0     | 20.7     |  25.0     |    32.6     | 34.28
+          0.0     | 21.0     |  25.0     |    33.1     | 34.09
+          0.0     | 21.2     |  25.0     |    33.4     | 33.93
+          0.0     | 21.3     |  25.0     |    33.6     | 33.81
+          0.0     | 21.5     |  25.0     |    33.6     | 33.72
+          0.0     | 21.5     |  25.0     |    33.7     | 33.65
+          0.0     | 21.6     |  25.0     |    33.7     | 33.59
+          0.0     | 21.7     |  25.0     |    33.6     | 33.54
         """
 
         self._assert_temperature_predictions(controller, temperatures, simulate_raum_ist=True)

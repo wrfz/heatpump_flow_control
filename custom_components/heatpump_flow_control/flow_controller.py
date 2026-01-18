@@ -1,6 +1,6 @@
 """Machine Learning Controller für Wärmepumpen-Regelung."""
 
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
 import logging
 import math
 import time as time_module
@@ -27,13 +27,13 @@ _LOGGER = logging.getLogger(__name__)
 
 # Pickle-Format Version für Migration
 # Erhöhe diese Zahl bei inkompatiblen Code-Änderungen
-PICKLE_VERSION = 3
+PICKLE_VERSION = 4
 
 # Gewichtung für synthetische Trainingsdaten
 # Niedrigerer Wert = echte Daten haben stärkeren Einfluss
 # Mit 0.001: Echte Daten dominieren (>80%) nach ~3 Tagen
 # Berechnung: 3 Tage × 48 pred/Tag × 2.0 weight = 288 vs 70.200 × 0.001 = 70
-SYNTHETIC_WEIGHT = 0.001
+SYNTHETIC_WEIGHT = 0.1
 
 
 class FlowController:
@@ -202,6 +202,10 @@ class FlowController:
         """Heizkurve für synthetisches Training.
 
         Typische Heizkurve: Vorlauf = A - B * Außentemperatur.
+
+        Args:
+            aussen_temp: Außentemperatur in Grad Celsius
+            raum_abweichung: Positiv values mean room is too cold and negative too warm.
         """
 
         # Heizkurve: 15°C → min-vorlauf bis -20°C → max-vorlauf
@@ -211,7 +215,7 @@ class FlowController:
         vorlauf = p0.vorlauf + (p1.vorlauf - p0.vorlauf) / (p1.temp - p0.temp) * (aussen_temp - p0.temp)
 
         # Korrektur basierend auf Raum-Abweichung
-        vorlauf += raum_abweichung * 10.0
+        vorlauf += raum_abweichung * 2.0
 
         v_min = min(p0.vorlauf, p1.vorlauf)
         v_max = max(p0.vorlauf, p1.vorlauf)
@@ -236,42 +240,35 @@ class FlowController:
                     for raum_soll in [16.0, 17.0, 18.0, 19.0, 20.0, 21.0, 21.5, 22.0, 22.5, 22.5, 23.0, 24.0, 25.0, 26.0, 27.0, 28.0]:
                         # Breite Abweichungen für robustes Training (auch große Abweichungen wie im echten Betrieb)
                         for raum_abweichung in [-5.0, -3.0, -1.0, -0.5, 0.0, 0.5, 1.0, 3.0, 5.0]:
+                            raum_ist = raum_soll - raum_abweichung
+
                             # Berechne Vorlauf-Soll aus Heizkurve
-                            vorlauf_curve = self._heizkurve_fallback(
+                            vorlauf_soll = self._heizkurve_fallback(
                                 float(t_aussen), raum_abweichung
                             )
 
-                            # Vorlauf_ist variieren: mal zu niedrig, mal genau richtig, mal zu hoch
-                            for vorlauf_offset in [-2.0, 0.0, 2.0]:
-                                vorlauf_ist_value = vorlauf_curve + vorlauf_offset
 
-                                # Trainiere das Modell mit synthetischen Features
-                                synthetic_features = Features(
-                                    aussen_temp=float(t_aussen),
-                                    raum_ist=raum_soll + raum_abweichung,
-                                    raum_soll=raum_soll,
-                                    vorlauf_ist=vorlauf_ist_value,
-                                    raum_abweichung=raum_abweichung,
-                                    aussen_trend_1h=0.0,
-                                    stunde_sin=0.0,
-                                    stunde_cos=1.0,
-                                    wochentag_sin=0.0,
-                                    wochentag_cos=1.0,
-                                    temp_diff=float(t_aussen) - (raum_soll + raum_abweichung),
-                                    vorlauf_raum_diff=vorlauf_ist_value - (raum_soll + raum_abweichung),
-                                    thermische_leistung=3.0,  # Mittlere Leistung für synthetische Daten
-                                    thermische_leistung_relativ=0.5,  # 50% der max. Leistung
-                                )
+                            # Trainiere das Modell mit synthetischen Features
+                            synthetic_features = Features(
+                                aussen_temp=float(t_aussen),
+                                raum_abweichung=raum_abweichung,
+                                temp_diff=float(t_aussen) - raum_ist,
+                                thermische_leistung_relativ=0.5,        # 50% der max. Leistung
+                                aussen_trend_1h=0.0,
+                                stunde_sin=0.0,
+                                stunde_cos=1.0,
+                                wochentag_sin=0.0,
+                                wochentag_cos=1.0,
+                            )
 
-                                self.model.learn_one(
-                                    synthetic_features.to_dict(),
-                                    vorlauf_curve,
-                                    sample_weight=SYNTHETIC_WEIGHT  # Schwächere Gewichtung für schnelle Anpassung
-                                )
-                                synthetic_count += 1
+                            self.model.learn_one(
+                                synthetic_features.to_dict(),
+                                vorlauf_soll,
+                                sample_weight=SYNTHETIC_WEIGHT  # Schwächere Gewichtung für schnelle Anpassung
+                            )
+                            synthetic_count += 1
 
             elapsed_time = time_module.time() - start_time
-            print("elapsed_time: ", elapsed_time)
 
             _LOGGER.info(
                 "Synthetisches Training abgeschlossen: %d Datenpunkte (weight=%.1f) in %.2f Sekunden",
@@ -334,21 +331,14 @@ class FlowController:
 
         return Features(
             aussen_temp = sensor_values.aussen_temp,
-            raum_ist = sensor_values.raum_ist,
-            raum_soll = sensor_values.raum_soll,
-            vorlauf_ist = sensor_values.vorlauf_ist,
             raum_abweichung = raum_abweichung,
+            temp_diff = sensor_values.aussen_temp - sensor_values.raum_ist,
+            thermische_leistung_relativ = thermische_leistung_relativ,
             aussen_trend_1h = self.aussen_temp_history.get_trend(hours=1.0),
             stunde_sin = stunde_sin,
             stunde_cos = stunde_cos,
             wochentag_sin = wochentag_sin,
             wochentag_cos = wochentag_cos,
-            # Interaktions-Features
-            temp_diff = sensor_values.aussen_temp - sensor_values.raum_ist,
-            vorlauf_raum_diff = sensor_values.vorlauf_ist - sensor_values.raum_ist,
-            # Thermische Leistung
-            thermische_leistung = thermische_leistung,
-            thermische_leistung_relativ = thermische_leistung_relativ,
         )
 
     def _bewerte_erfahrung(
@@ -368,16 +358,11 @@ class FlowController:
 
         # Prüfe ob Wärmepumpe am Limit war
         thermische_leistung_relativ = erfahrung.features.thermische_leistung_relativ
-        am_oberen_limit = thermische_leistung_relativ > 0.95  # >95% der max. Leistung
-        am_unteren_limit = thermische_leistung_relativ < 0.05  # <5% der max. Leistung
+        am_oberen_limit = thermische_leistung_relativ > 0.95    # > 95% der max. Leistung
+        am_unteren_limit = thermische_leistung_relativ < 0.05   # <  5% der max. Leistung
 
-        # Quadratische Gewichtung für sanfte Steigung
-        # weight: 1.0 (bei 0°C) → 2.0 (bei 1°C) → 5.0 (bei 2°C) → 10.0 (bei 3°C)
-        weight = 1.0 + abweichung_abs ** 1.5
-
-        # Korrektur-Faktor steigt ebenfalls stetig
-        # Bei kleinen Abweichungen sanfte Korrektur, bei großen stärker
-        korrektur_faktor = 2.0 * abweichung_abs
+        weight = 0.5 + abweichung_abs ** 1.5
+        korrektur_faktor = 3.0
 
         # Reduziere Korrektur wenn Pumpe am Limit war
         if am_oberen_limit and abweichung > 0:  # Zu kalt UND am oberen Leistungslimit
@@ -397,13 +382,21 @@ class FlowController:
                 thermische_leistung_relativ * 100
             )
 
-        # Symmetrisch für zu kalt/zu warm (abweichung kann positiv oder negativ sein)
         korrigierter_vorlauf = erfahrung.vorlauf_soll + abweichung * korrektur_faktor
 
+        # Begrenze auf physikalisch möglichen Bereich
+        korrigierter_vorlauf = max(
+            self.min_vorlauf,
+            min(self.max_vorlauf, korrigierter_vorlauf)
+        )
+
         _LOGGER.info(
-            "_bewerte_erfahrung() Abw=%.2f°C, Leistung=%.0f%%, Vorlauf %.1f→%.1f°C, weight=%.2f",
-            abweichung, thermische_leistung_relativ * 100,
-            erfahrung.vorlauf_soll, korrigierter_vorlauf, weight
+            "Erfahrung bewertet: Abw=%.2f°C, Leistung=%.0f%%, Vorlauf %.1f→%.1f°C, Weight=%.2f",
+            abweichung,
+            thermische_leistung_relativ * 100,
+            erfahrung.vorlauf_soll,
+            korrigierter_vorlauf,
+            weight
         )
 
         return VorlaufSollWeight(vorlauf_soll=korrigierter_vorlauf, weight=weight)
