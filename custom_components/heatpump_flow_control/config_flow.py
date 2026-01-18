@@ -53,7 +53,7 @@ def get_config_schema(defaults=None):
                 )
             ),
             vol.Required(
-                "is_heating", default=defaults.get("is_heating")
+                "is_heating_entity", default=defaults.get("is_heating_entity")
             ): selector.EntitySelector(selector.EntitySelectorConfig(domain="binary_sensor")),
             vol.Optional(
                 "thermische_leistung_sensor", default=defaults.get("thermische_leistung_sensor")

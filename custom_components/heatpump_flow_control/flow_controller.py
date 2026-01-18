@@ -156,7 +156,7 @@ class FlowController:
         """Set whether the controller is enabled."""
 
         self._enabled = value
-        _LOGGER.debug("Controller Status geändert: %s", value)
+        _LOGGER.debug("Controller enabled: %d", value)
 
     def update_config(
         self,

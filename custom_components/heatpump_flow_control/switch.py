@@ -20,6 +20,7 @@ async def async_setup_entry(
 ) -> None:
     """Set up the Flow Control switch."""
     _LOGGER.info("switch: setting up")
+
     async_add_entities([FlowControlActiveSwitch(entry)], True)
 
 

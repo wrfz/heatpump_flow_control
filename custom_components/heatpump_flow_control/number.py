@@ -5,7 +5,7 @@ import logging
 from typing import Any, cast
 
 from homeassistant.components.number import NumberEntity, NumberMode
-from homeassistant.const import UnitOfTemperature
+from homeassistant.const import STATE_ON, UnitOfTemperature
 from homeassistant.core import HomeAssistant, State, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import (
@@ -40,7 +40,6 @@ from .const import (
     CONF_UPDATE_INTERVAL,
     CONF_VORLAUF_IST_SENSOR,
     CONF_VORLAUF_SOLL_ENTITY,
-    DEFAULT_BETRIEBSART_HEIZEN_WERT,
     DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
 )
@@ -213,8 +212,7 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return the state attributes."""
 
-        _LOGGER.info("extra_state_attributes()")
-        _LOGGER.info(self._extra_attributes)
+        _LOGGER.info("extra_state_attributes() %s", self._extra_attributes)
 
         return self._extra_attributes
 
@@ -234,7 +232,7 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
     def _async_sensor_state_changed(self, event) -> None:
         """Handle sensor state changes for learning."""
 
-        _LOGGER.info("_async_sensor_state_changed()")
+        _LOGGER.debug("_async_sensor_state_changed()")
 
         # Ignoriere unavailable/unknown states
         new_state = event.data.get("new_state")
@@ -248,7 +246,7 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
     async def _check_and_update_if_ready(self):
         """Check if all sensors are ready and trigger update."""
 
-        _LOGGER.info("_check_and_update_if_ready()")
+        _LOGGER.debug("_check_and_update_if_ready()")
 
         sensor_values = await self._async_get_sensor_values()
         if sensor_values is not None:
@@ -267,7 +265,7 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
         is_heating_state = self.hass.states.get(self._is_heating_entity)
         if is_heating_state is None:
             _LOGGER.warning(
-                "Betriebsart sensor %s not found, assuming heating disabled",
+                "is_heating sensor %s not found, assuming heating disabled",
                 self._is_heating_entity,
             )
             return False
@@ -280,11 +278,12 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
             )
             return False
 
-        is_heating_str = is_heating_state.state.strip()
-        is_heating = is_heating_str == DEFAULT_BETRIEBSART_HEIZEN_WERT
+        is_heating = is_heating_state.state == STATE_ON
+
+        _LOGGER.info("_is_heating_mode: %s, %d", is_heating_state.state, is_heating)
 
         if not is_heating:
-            _LOGGER.debug("is_heating is %s, not in heating mode", is_heating_str)
+            _LOGGER.debug("is_heating is %s, not in heating mode", is_heating_state.state)
 
         return is_heating
 
@@ -383,6 +382,8 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
                 if not is_heating:
                     _LOGGER.info("Not in heating mode - skipping update")
                     return
+            else:
+                _LOGGER.warning("No is_heating_entity found!")
 
             # Normal operation - proceed with prediction
             sensor_values = await self._async_get_sensor_values()
@@ -497,12 +498,12 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
         if new_state is None or old_state is None:
             return
 
-        new_is_heating = new_state.state.strip() == DEFAULT_BETRIEBSART_HEIZEN_WERT
-        old_is_heating = old_state.state.strip() == DEFAULT_BETRIEBSART_HEIZEN_WERT
+        new_is_heating = new_state.state == STATE_ON
+        old_is_heating = old_state.state == STATE_ON
 
         # Only react to transition from off to on
         if new_is_heating and not old_is_heating:
-            _LOGGER.info("Heating resumed after defrost")
+            _LOGGER.info("Heating resumed")
 
             # Check if update_interval has passed since last prediction
             if self._last_prediction_time is not None:
@@ -510,7 +511,7 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
                 if time_since_last < self._update_interval_minutes:
                     wait_time = self._update_interval_minutes - time_since_last
                     _LOGGER.info(
-                        "Respecting update_interval: waiting %.1f more minutes (%.1f/%.1f min since last prediction)",
+                        "Less than update_interval since last prediction: waiting %.1f more minutes (%.1f/%.1f min since last)",
                         wait_time,
                         time_since_last,
                         self._update_interval_minutes
@@ -522,13 +523,13 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
             self._heating_resumed_at = dt_util.now()
             _LOGGER.info("Starting 10min stabilization period")
         elif not new_is_heating and old_is_heating:
-            _LOGGER.info("Heating disabled (defrost started)")
+            _LOGGER.info("Heating disabled")
             self._heating_resumed_at = None
 
     async def _async_set_vorlauf_soll(self, value: float) -> None:
         """Set the Vorlauf-Soll on the target entity."""
 
-        _LOGGER.info("_async_update_vorlauf_soll()")
+        _LOGGER.info("_async_set_vorlauf_soll()")
 
         try:
             target_entity = self.hass.states.get(self._vorlauf_soll_entity)

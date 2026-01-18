@@ -31,6 +31,12 @@
         "title": "Optionen",
         "description": "Passe die Regelungs-Parameter an.",
         "data": {
+          "aussen_temp_sensor": "Außentemperatur Sensor",
+          "raum_ist_sensor": "Raum-Ist Sensor",
+          "raum_soll_sensor": "Raum-Soll Sensor (oder Climate Entity)",
+          "vorlauf_ist_sensor": "Vorlauf-Ist Sensor",
+          "vorlauf_soll_entity": "Vorlauf-Soll Entity (Input Number / Number / Climate)",
+          "is_heating_entity": "Is-heating Entity",
           "min_vorlauf": "Minimale Vorlauftemperatur",
           "max_vorlauf": "Maximale Vorlauftemperatur",
           "update_interval": "Update-Intervall (Minuten)",
