@@ -259,6 +259,7 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
             True if in heating mode or sensor not configured, False otherwise
         """
         if not self._is_heating_entity:
+            _LOGGER.warning("Entity is_heating_entity not configured!")
             return True  # Kein Sensor konfiguriert = immer lernen
 
         is_heating_state = self.hass.states.get(self._is_heating_entity)
@@ -280,9 +281,6 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
         is_heating = is_heating_state.state == STATE_ON
 
         _LOGGER.info("_is_heating_mode: %s, %d", is_heating_state.state, is_heating)
-
-        if not is_heating:
-            _LOGGER.debug("is_heating is %s, not in heating mode", is_heating_state.state)
 
         return is_heating
 
@@ -362,10 +360,19 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
     async def _async_update_vorlauf_soll(self, now=None) -> None:
         """Update the Vorlauf-Soll value."""
 
-        _LOGGER.info("_async_update_vorlauf_soll()")
+        is_heating = await self._is_heating_mode()
+
+        _LOGGER.info("_async_update_vorlauf_soll() controler.enabled: %d, is_heating: %d", self._controller.enabled, is_heating)
 
         try:
-            # If heating mode tracking enabled and in stabilization, skip
+            if not self._controller.enabled:
+                _LOGGER.info("Controller disabled - skipping update")
+                return
+
+            if not is_heating:
+                _LOGGER.info("Not in heating mode - skipping update")
+                return
+
             if self._heating_resumed_at is not None:
                 time_since_resume = (dt_util.now() - self._heating_resumed_at).total_seconds() / 60
                 if time_since_resume < 10.0:
@@ -374,19 +381,6 @@ class FlowControlNumber(NumberEntity, RestoreEntity):
                         time_since_resume
                     )
                     return
-
-            if self._controller.enabled is False:
-                _LOGGER.info("Controller disabled - skipping update")
-                return
-
-            # Check if heating mode is disabled (if tracking enabled)
-            if self._is_heating_entity:
-                is_heating = await self._is_heating_mode()
-                if not is_heating:
-                    _LOGGER.info("Not in heating mode - skipping update")
-                    return
-            else:
-                _LOGGER.warning("No is_heating_entity found!")
 
             # Normal operation - proceed with prediction
             sensor_values = await self._async_get_sensor_values()

@@ -142,7 +142,7 @@ async def _async_load_or_create_controller(
             min_thermische_leistung=min_thermische_leistung,
             max_thermische_leistung=max_thermische_leistung,
         )
-        loaded_controller.setup(iterations=10)
+        loaded_controller.setup(iterations=1)
 
     return loaded_controller
 

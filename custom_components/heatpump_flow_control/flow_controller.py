@@ -236,17 +236,16 @@ class FlowController:
             start_time = time_module.time()
             for _ in range(iterations):
                 for t_aussen in range(int(temp_min), int(temp_max) + 1):
-                    # Breiter Temperaturbereich 16-28°C mit Schwerpunkt auf 22.5°C
-                    for raum_soll in [16.0, 17.0, 18.0, 19.0, 20.0, 21.0, 21.5, 22.0, 22.5, 22.5, 23.0, 24.0, 25.0, 26.0, 27.0, 28.0]:
+                    # Temperaturbereich 16-25°C für Raum-Soll
+                    for raum_soll in range(16, 26):
                         # Breite Abweichungen für robustes Training (auch große Abweichungen wie im echten Betrieb)
-                        for raum_abweichung in [-5.0, -3.0, -1.0, -0.5, 0.0, 0.5, 1.0, 3.0, 5.0]:
+                        for raum_abweichung in range(-5, 5 + 1): # -5 bis +5°C
                             raum_ist = raum_soll - raum_abweichung
 
                             # Berechne Vorlauf-Soll aus Heizkurve
                             vorlauf_soll = self._heizkurve_fallback(
                                 float(t_aussen), raum_abweichung
                             )
-
 
                             # Trainiere das Modell mit synthetischen Features
                             synthetic_features = Features(
